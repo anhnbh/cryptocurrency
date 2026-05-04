@@ -83,6 +83,25 @@ function renderHoldings(holdings) {
   });
 }
 
+function renderPrices(rows) {
+  const ul = document.getElementById("priceList");
+  ul.innerHTML = "";
+
+  if (!rows.length) {
+    ul.innerHTML = "<li>No saved prices yet.</li>";
+    return;
+  }
+
+  rows.forEach((row) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <strong>${row.coin_name} (${row.symbol})</strong><br>
+      ${fmtUSD(row.price_usd)} | <span class="${pnlClass(row.change_24h_pct)}">${Number(row.change_24h_pct).toFixed(2)}%</span>
+    `;
+    ul.appendChild(li);
+  });
+}
+
 function renderTransactions(rows) {
   const ul = document.getElementById("recentTx");
   ul.innerHTML = "";
@@ -114,6 +133,7 @@ async function loadState() {
   renderTabs(data.portfolios, data.active_portfolio_id);
   renderSummary(data.summary);
   renderHoldings(data.holdings);
+  renderPrices(data.prices || []);
   renderTransactions(data.transactions);
 }
 
@@ -129,6 +149,18 @@ async function createPortfolio(name) {
   }
   const row = await res.json();
   state.activePortfolioId = row.id;
+}
+
+async function upsertPrice(payload) {
+  const res = await fetch("/api/prices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || "Failed to save market price");
+  }
 }
 
 async function createTransaction(payload) {
@@ -152,6 +184,27 @@ function bindForms() {
     try {
       await createPortfolio(name);
       nameEl.value = "";
+      await loadState();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  document.getElementById("priceForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      symbol: document.getElementById("priceSymbol").value.trim().toUpperCase(),
+      coin_name: document.getElementById("priceCoinName").value.trim(),
+      price_usd: document.getElementById("marketPriceUsd").value,
+      change_24h_pct: document.getElementById("marketChange24h").value || "0",
+    };
+
+    try {
+      await upsertPrice(payload);
+      document.getElementById("priceSymbol").value = "";
+      document.getElementById("priceCoinName").value = "";
+      document.getElementById("marketPriceUsd").value = "";
+      document.getElementById("marketChange24h").value = "0";
       await loadState();
     } catch (err) {
       alert(err.message);

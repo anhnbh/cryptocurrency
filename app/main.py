@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,9 +15,6 @@ from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, cre
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/portfolio.db")
-PRICE_API_BASE = os.getenv("PRICE_API_BASE", "https://api.coingecko.com/api/v3")
-PRICE_VS_CURRENCY = os.getenv("PRICE_VS_CURRENCY", "usd")
-CG_DEMO_API_KEY = os.getenv("COINGECKO_DEMO_API_KEY", "")
 
 
 class Base(DeclarativeBase):
@@ -53,6 +49,16 @@ class Transaction(Base):
     portfolio: Mapped[Portfolio] = relationship(back_populates="transactions")
 
 
+class AssetPrice(Base):
+    __tablename__ = "asset_prices"
+
+    symbol: Mapped[str] = mapped_column(String(30), primary_key=True)
+    coin_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    price_usd: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
+    change_24h_pct: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, default=Decimal("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
@@ -82,6 +88,13 @@ class TransactionCreate(BaseModel):
     fee_usd: str | None = "0"
     note: str | None = ""
     tx_time: str
+
+
+class PriceUpdate(BaseModel):
+    symbol: str = Field(min_length=1, max_length=30)
+    coin_name: str = Field(min_length=1, max_length=120)
+    price_usd: str
+    change_24h_pct: str | None = "0"
 
 
 app = FastAPI(title="Local Crypto Portfolio")
@@ -129,6 +142,40 @@ def parse_decimal(text: str | None, field_name: str, allow_none: bool = False) -
     except (InvalidOperation, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be a number") from exc
     return value
+
+
+@app.post("/api/prices")
+def upsert_price(payload: PriceUpdate, db: Session = Depends(get_db)):
+    symbol = payload.symbol.upper().strip()
+    coin_name = payload.coin_name.strip()
+
+    price = parse_decimal(payload.price_usd, "price_usd")
+    if price is None or price <= 0:
+        raise HTTPException(status_code=400, detail="price_usd must be > 0")
+
+    change = parse_decimal(payload.change_24h_pct, "change_24h_pct")
+    if change is None:
+        change = Decimal("0")
+
+    row = db.get(AssetPrice, symbol)
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = AssetPrice(
+            symbol=symbol,
+            coin_name=coin_name,
+            price_usd=price,
+            change_24h_pct=change,
+            updated_at=now,
+        )
+        db.add(row)
+    else:
+        row.coin_name = coin_name
+        row.price_usd = price
+        row.change_24h_pct = change
+        row.updated_at = now
+
+    db.commit()
+    return {"symbol": symbol}
 
 
 @app.post("/api/transactions")
@@ -182,7 +229,7 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
 
 
 @app.get("/api/state")
-async def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_db)):
+def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_db)):
     portfolios = db.scalars(select(Portfolio).order_by(Portfolio.id.asc())).all()
     if not portfolios:
         p = Portfolio(name="Main Portfolio")
@@ -199,8 +246,7 @@ async def portfolio_state(portfolio_id: int | None = None, db: Session = Depends
 
     all_asset_state = build_holdings_state(db, active.id, include_zero=True)
     holdings_state = {k: v for k, v in all_asset_state.items() if v["quantity"] > 0}
-    symbols = list(holdings_state.keys())
-    prices = await fetch_prices(symbols)
+    prices = get_price_map(db)
 
     holdings = []
     current_balance = Decimal("0")
@@ -209,9 +255,9 @@ async def portfolio_state(portfolio_id: int | None = None, db: Session = Depends
     weighted_24h_delta = Decimal("0")
 
     for symbol, item in holdings_state.items():
-        price_item = prices.get(symbol.lower(), {})
-        current_price = Decimal(str(price_item.get("usd", item["last_buy_price"] or 0)))
-        price_change_24h = Decimal(str(price_item.get("usd_24h_change", 0) or 0))
+        price_item = prices.get(symbol, {})
+        current_price = Decimal(str(price_item.get("price_usd", item["last_buy_price"] or 0)))
+        price_change_24h = Decimal(str(price_item.get("change_24h_pct", 0) or 0))
 
         qty = item["quantity"]
         cost = item["cost_basis"]
@@ -255,6 +301,8 @@ async def portfolio_state(portfolio_id: int | None = None, db: Session = Depends
         .limit(200)
     ).all()
 
+    price_rows = db.scalars(select(AssetPrice).order_by(AssetPrice.symbol.asc())).all()
+
     return JSONResponse(
         {
             "portfolios": [{"id": p.id, "name": p.name} for p in portfolios],
@@ -262,11 +310,25 @@ async def portfolio_state(portfolio_id: int | None = None, db: Session = Depends
             "summary": {
                 "current_balance": float(current_balance),
                 "total_profit_loss": float((current_balance - total_cost) + total_realized),
-                "total_profit_loss_pct": float((((current_balance - total_cost) + total_realized) / total_cost * Decimal("100")) if total_cost > 0 else Decimal("0")),
+                "total_profit_loss_pct": float(
+                    (((current_balance - total_cost) + total_realized) / total_cost * Decimal("100"))
+                    if total_cost > 0
+                    else Decimal("0")
+                ),
                 "portfolio_change_24h": float(weighted_24h_delta),
                 "top_performer": top,
             },
             "holdings": holdings,
+            "prices": [
+                {
+                    "symbol": p.symbol,
+                    "coin_name": p.coin_name,
+                    "price_usd": float(p.price_usd),
+                    "change_24h_pct": float(p.change_24h_pct),
+                    "updated_at": p.updated_at.isoformat(),
+                }
+                for p in price_rows
+            ],
             "transactions": [
                 {
                     "id": t.id,
@@ -347,30 +409,12 @@ def build_holdings_state(db: Session, portfolio_id: int, include_zero: bool = Fa
     return {k: v for k, v in state.items() if v["quantity"] > 0}
 
 
-async def fetch_prices(symbols: list[str]) -> dict[str, Any]:
-    if not symbols:
-        return {}
-    headers = {}
-    if CG_DEMO_API_KEY:
-        headers["x-cg-demo-api-key"] = CG_DEMO_API_KEY
-
-    merged: dict[str, Any] = {}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            for i in range(0, len(symbols), 50):
-                chunk = symbols[i : i + 50]
-                params = {
-                    "vs_currencies": PRICE_VS_CURRENCY,
-                    "symbols": ",".join(s.lower() for s in chunk),
-                    "include_tokens": "top",
-                    "include_24hr_change": "true",
-                }
-                resp = await client.get(f"{PRICE_API_BASE}/simple/price", params=params, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                if isinstance(data, dict):
-                    merged.update(data)
-    except Exception:
-        return {}
-
-    return merged
+def get_price_map(db: Session) -> dict[str, dict[str, Any]]:
+    rows = db.scalars(select(AssetPrice)).all()
+    return {
+        row.symbol.upper(): {
+            "price_usd": float(row.price_usd),
+            "change_24h_pct": float(row.change_24h_pct),
+        }
+        for row in rows
+    }

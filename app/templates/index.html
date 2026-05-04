@@ -11,7 +11,7 @@
       <header class="topbar">
         <div>
           <h1>Local Portfolio Tracker</h1>
-          <p>Self-hosted, unlimited portfolios and transactions.</p>
+          <p>Self-hosted, unlimited portfolios and transactions. No external price API.</p>
         </div>
         <button id="refreshBtn" class="btn ghost">Refresh</button>
       </header>
@@ -67,7 +67,39 @@
         </section>
 
         <aside class="panel side">
-          <h2>Add Transaction</h2>
+          <h2>Set Market Price</h2>
+          <p class="muted">Manual local pricing by symbol.</p>
+
+          <form id="priceForm" class="stack-form">
+            <label>
+              Symbol
+              <input id="priceSymbol" type="text" placeholder="BTC" required />
+            </label>
+
+            <label>
+              Coin Name
+              <input id="priceCoinName" type="text" placeholder="Bitcoin" required />
+            </label>
+
+            <label>
+              Current Price (USD)
+              <input id="marketPriceUsd" type="number" step="any" min="0.0000000001" required />
+            </label>
+
+            <label>
+              24h Change (%)
+              <input id="marketChange24h" type="number" step="any" value="0" />
+            </label>
+
+            <button type="submit" class="btn success">Save Market Price</button>
+          </form>
+
+          <div class="recent-wrap">
+            <h3>Saved Prices</h3>
+            <ul id="priceList" class="recent-list"></ul>
+          </div>
+
+          <h2 style="margin-top:16px">Add Transaction</h2>
           <p class="muted">No hard limit. Store everything locally.</p>
 
           <form id="txForm" class="stack-form">
@@ -126,10 +158,6 @@
         </aside>
       </section>
     </main>
-
-    <template id="portfolioTabTpl">
-      <button class="tab-btn"></button>
-    </template>
 
     <script src="/static/app.js"></script>
   </body>

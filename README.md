@@ -1,41 +1,45 @@
-# Local Crypto Portfolio (CoinGecko-style)
+# Local Crypto Portfolio (CoinGecko-style UI)
 
-Self-hosted portfolio tracker mô phỏng luồng Portfolio của CoinGecko, chạy local bằng Docker, không giới hạn số lượng transaction.
+Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy local bằng Docker, transaction không giới hạn.
 
 ## Có gì trong bản này
 
 - Nhiều `portfolio` (tạo, chuyển tab).
 - Thêm transaction không giới hạn (`buy`, `sell`, `transfer_in`, `transfer_out`).
-- Tự tính holdings, cost basis (average cost), realized/unrealized PnL.
+- Tính holdings, average cost, realized/unrealized PnL.
 - Dashboard summary: current balance, 24h portfolio change, total PnL, top performer.
-- Lấy giá realtime từ CoinGecko `/simple/price` theo symbol.
-- Dữ liệu lưu local SQLite (`./data/portfolio.db`).
+- `Set Market Price` thủ công cho từng symbol (giá hiện tại + %24h).
+- Không gọi API ngoài cho dữ liệu giá. Toàn bộ dữ liệu nằm local SQLite (`./data/portfolio.db`).
+- Có Nginx reverse proxy, route public qua port `80`.
 
-## Chạy bằng Docker
-
-```bash
-docker compose up --build
-```
-
-Mở: `http://localhost:8000`
-
-## Biến môi trường (tuỳ chọn)
-
-Copy file env mẫu:
+## Chạy trên VPS bằng Docker
 
 ```bash
-cp .env.example .env
+docker compose up --build -d
 ```
 
-- `COINGECKO_DEMO_API_KEY`: optional, giúp ổn định rate limit nếu bạn có key demo.
+Mở trên internet:
+
+- `http://<VPS_PUBLIC_IP>`
+
+## Cấu trúc service
+
+- `portfolio`: app FastAPI chạy nội bộ cổng `8000` (không public trực tiếp).
+- `nginx`: public cổng `80`, reverse proxy vào `portfolio:8000`.
 
 ## API chính
 
 - `GET /api/state?portfolio_id=...`
 - `POST /api/portfolios`
+- `POST /api/prices`
 - `POST /api/transactions`
+
+## Lưu ý VPS
+
+- Mở firewall/security group cho TCP `80`.
+- Nếu VPS đã có web server khác đang dùng port `80`, cần tắt nó hoặc đổi mapping port ở `docker-compose.yml`.
 
 ## Ghi chú
 
-- Mục tiêu là self-hosted tracker local tương tự trải nghiệm CoinGecko Portfolio, không phụ thuộc giới hạn free plan transaction.
-- Không phải bản clone 100% UI/feature của CoinGecko (không có toàn bộ module analytics nâng cao).
+- Đây là bản self-hosted để tự quản lý, tránh giới hạn transaction kiểu free plan trên các nền tảng public.
+- UI/flow tương tự, không phải clone 100% toàn bộ tính năng CoinGecko.
