@@ -9,7 +9,7 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Tính holdings, average cost, realized/unrealized PnL.
 - Dashboard summary: current balance, 24h portfolio change, total PnL, top performer.
 - Tự động cập nhật giá hiện tại từ Binance Spot mỗi `5 phút` (mặc định) cho các symbol trong portfolio.
-- Vẫn có `Set Market Price` để override thủ công nếu cần.
+- Form add transaction có dropdown search asset lấy từ Binance (không nhập symbol linh tinh).
 - Dữ liệu transaction/portfolio nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 
@@ -44,7 +44,7 @@ Ví dụ `BTC` sẽ map thành cặp `BTCUSDT`.
 
 - `GET /api/state?portfolio_id=...`
 - `POST /api/portfolios`
-- `POST /api/prices`
+- `GET /api/assets`
 - `POST /api/transactions`
 
 ## Lưu ý VPS

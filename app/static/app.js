@@ -1,5 +1,6 @@
 const state = {
   activePortfolioId: null,
+  assets: [],
 };
 
 const fmtUSD = (n) =>
@@ -83,25 +84,6 @@ function renderHoldings(holdings) {
   });
 }
 
-function renderPrices(rows) {
-  const ul = document.getElementById("priceList");
-  ul.innerHTML = "";
-
-  if (!rows.length) {
-    ul.innerHTML = "<li>No saved prices yet.</li>";
-    return;
-  }
-
-  rows.forEach((row) => {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <strong>${row.coin_name} (${row.symbol})</strong><br>
-      ${fmtUSD(row.price_usd)} | <span class="${pnlClass(row.change_24h_pct)}">${Number(row.change_24h_pct).toFixed(2)}%</span>
-    `;
-    ul.appendChild(li);
-  });
-}
-
 function renderTransactions(rows) {
   const ul = document.getElementById("recentTx");
   ul.innerHTML = "";
@@ -124,6 +106,42 @@ function renderTransactions(rows) {
   });
 }
 
+function renderAssetOptions(filtered) {
+  const select = document.getElementById("assetSelect");
+  const currentValue = select.value;
+  select.innerHTML = "";
+
+  filtered.forEach((asset) => {
+    const opt = document.createElement("option");
+    opt.value = asset.symbol;
+    opt.textContent = `${asset.symbol} / USDT`;
+    opt.dataset.coinName = asset.coin_name || asset.symbol;
+    select.appendChild(opt);
+  });
+
+  if (currentValue && filtered.some((a) => a.symbol === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function filterAssets() {
+  const keyword = document.getElementById("assetSearch").value.trim().toUpperCase();
+  if (!keyword) {
+    renderAssetOptions(state.assets);
+    return;
+  }
+
+  const filtered = state.assets.filter((a) => a.symbol.includes(keyword));
+  renderAssetOptions(filtered);
+}
+
+async function loadAssets() {
+  const res = await fetch("/api/assets");
+  const data = await res.json();
+  state.assets = data.assets || [];
+  renderAssetOptions(state.assets);
+}
+
 async function loadState() {
   const query = state.activePortfolioId ? `?portfolio_id=${state.activePortfolioId}` : "";
   const res = await fetch(`/api/state${query}`);
@@ -133,7 +151,6 @@ async function loadState() {
   renderTabs(data.portfolios, data.active_portfolio_id);
   renderSummary(data.summary);
   renderHoldings(data.holdings);
-  renderPrices(data.prices || []);
   renderTransactions(data.transactions);
 }
 
@@ -149,18 +166,6 @@ async function createPortfolio(name) {
   }
   const row = await res.json();
   state.activePortfolioId = row.id;
-}
-
-async function upsertPrice(payload) {
-  const res = await fetch("/api/prices", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Failed to save market price");
-  }
 }
 
 async function createTransaction(payload) {
@@ -190,31 +195,19 @@ function bindForms() {
     }
   });
 
-  document.getElementById("priceForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const payload = {
-      symbol: document.getElementById("priceSymbol").value.trim().toUpperCase(),
-      coin_name: document.getElementById("priceCoinName").value.trim(),
-      price_usd: document.getElementById("marketPriceUsd").value,
-      change_24h_pct: document.getElementById("marketChange24h").value || "0",
-    };
-
-    try {
-      await upsertPrice(payload);
-      document.getElementById("priceSymbol").value = "";
-      document.getElementById("priceCoinName").value = "";
-      document.getElementById("marketPriceUsd").value = "";
-      document.getElementById("marketChange24h").value = "0";
-      await loadState();
-    } catch (err) {
-      alert(err.message);
-    }
-  });
+  document.getElementById("assetSearch").addEventListener("input", filterAssets);
 
   document.getElementById("txForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!state.activePortfolioId) {
       alert("Please create/select a portfolio first.");
+      return;
+    }
+
+    const select = document.getElementById("assetSelect");
+    const selectedOption = select.options[select.selectedIndex];
+    if (!selectedOption) {
+      alert("Please select an asset from Binance list.");
       return;
     }
 
@@ -225,8 +218,8 @@ function bindForms() {
     const payload = {
       portfolio_id: state.activePortfolioId,
       tx_type: txType,
-      symbol: document.getElementById("symbol").value.trim().toUpperCase(),
-      coin_name: document.getElementById("coinName").value.trim(),
+      symbol: selectedOption.value,
+      coin_name: selectedOption.dataset.coinName || selectedOption.value,
       quantity: document.getElementById("quantity").value,
       price_usd: document.getElementById("priceUsd").value || null,
       fee_usd: document.getElementById("feeUsd").value || "0",
@@ -236,8 +229,6 @@ function bindForms() {
 
     try {
       await createTransaction(payload);
-      document.getElementById("symbol").value = "";
-      document.getElementById("coinName").value = "";
       document.getElementById("quantity").value = "";
       document.getElementById("priceUsd").value = "";
       document.getElementById("note").value = "";
@@ -248,9 +239,17 @@ function bindForms() {
     }
   });
 
-  document.getElementById("refreshBtn").addEventListener("click", loadState);
+  document.getElementById("refreshBtn").addEventListener("click", async () => {
+    await loadAssets();
+    await loadState();
+  });
 }
 
-setDefaultTxTime();
-bindForms();
-loadState();
+async function bootstrap() {
+  setDefaultTxTime();
+  bindForms();
+  await loadAssets();
+  await loadState();
+}
+
+bootstrap();

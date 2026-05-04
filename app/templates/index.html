@@ -67,42 +67,20 @@
         </section>
 
         <aside class="panel side">
-          <h2>Set Market Price</h2>
-          <p class="muted">Auto sync Binance every 5 minutes. You can still override manually.</p>
-
-          <form id="priceForm" class="stack-form">
-            <label>
-              Symbol
-              <input id="priceSymbol" type="text" placeholder="BTC" required />
-            </label>
-
-            <label>
-              Coin Name
-              <input id="priceCoinName" type="text" placeholder="Bitcoin" required />
-            </label>
-
-            <label>
-              Current Price (USD)
-              <input id="marketPriceUsd" type="number" step="any" min="0.0000000001" required />
-            </label>
-
-            <label>
-              24h Change (%)
-              <input id="marketChange24h" type="number" step="any" value="0" />
-            </label>
-
-            <button type="submit" class="btn success">Save Market Price</button>
-          </form>
-
-          <div class="recent-wrap">
-            <h3>Saved Prices</h3>
-            <ul id="priceList" class="recent-list"></ul>
-          </div>
-
-          <h2 style="margin-top:16px">Add Transaction</h2>
-          <p class="muted">No hard limit. Store everything locally.</p>
+          <h2>Add Transaction</h2>
+          <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
 
           <form id="txForm" class="stack-form">
+            <label>
+              Search Asset
+              <input id="assetSearch" type="text" placeholder="Type BTC, ETH..." />
+            </label>
+
+            <label>
+              Asset
+              <select id="assetSelect" required></select>
+            </label>
+
             <label>
               Type
               <select id="txType" required>
@@ -111,16 +89,6 @@
                 <option value="transfer_in">Transfer In</option>
                 <option value="transfer_out">Transfer Out</option>
               </select>
-            </label>
-
-            <label>
-              Symbol
-              <input id="symbol" type="text" placeholder="BTC" required />
-            </label>
-
-            <label>
-              Coin Name
-              <input id="coinName" type="text" placeholder="Bitcoin" required />
             </label>
 
             <label>

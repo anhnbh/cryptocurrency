@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -41,6 +41,7 @@ def env_int(name: str, default: int) -> int:
 
 PRICE_SYNC_ENABLED = env_bool("PRICE_SYNC_ENABLED", True)
 PRICE_SYNC_INTERVAL_SECONDS = max(60, env_int("PRICE_SYNC_INTERVAL_SECONDS", 300))
+ASSET_CACHE_TTL_SECONDS = max(300, env_int("ASSET_CACHE_TTL_SECONDS", 21600))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("portfolio")
@@ -98,6 +99,9 @@ app = FastAPI(title="Local Crypto Portfolio")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 price_sync_task: asyncio.Task[Any] | None = None
+assets_cache: list[dict[str, str]] = []
+assets_cache_expiry: datetime | None = None
+assets_cache_lock = asyncio.Lock()
 
 
 def get_db():
@@ -115,20 +119,13 @@ class PortfolioCreate(BaseModel):
 class TransactionCreate(BaseModel):
     portfolio_id: int
     symbol: str = Field(min_length=1, max_length=30)
-    coin_name: str = Field(min_length=1, max_length=120)
+    coin_name: str | None = Field(default=None, max_length=120)
     tx_type: str = Field(pattern=r"^(buy|sell|transfer_in|transfer_out)$")
     quantity: str
     price_usd: str | None = None
     fee_usd: str | None = "0"
     note: str | None = ""
     tx_time: str
-
-
-class PriceUpdate(BaseModel):
-    symbol: str = Field(min_length=1, max_length=30)
-    coin_name: str = Field(min_length=1, max_length=120)
-    price_usd: str
-    change_24h_pct: str | None = "0"
 
 
 @app.on_event("startup")
@@ -141,6 +138,8 @@ async def startup() -> None:
             seed = Portfolio(name="Main Portfolio")
             db.add(seed)
             db.commit()
+
+    await get_binance_assets(force_refresh=True)
 
     if PRICE_SYNC_ENABLED:
         price_sync_task = asyncio.create_task(price_sync_loop(), name="binance-price-sync")
@@ -179,6 +178,12 @@ def list_portfolios(db: Session = Depends(get_db)):
     return [{"id": row.id, "name": row.name} for row in rows]
 
 
+@app.get("/api/assets")
+async def list_assets():
+    assets = await get_binance_assets()
+    return {"quote_asset": PRICE_SYNC_QUOTE_ASSET, "assets": assets}
+
+
 def parse_decimal(text: str | None, field_name: str, allow_none: bool = False) -> Decimal | None:
     if text is None or str(text).strip() == "":
         if allow_none:
@@ -189,24 +194,6 @@ def parse_decimal(text: str | None, field_name: str, allow_none: bool = False) -
     except (InvalidOperation, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be a number") from exc
     return value
-
-
-@app.post("/api/prices")
-def upsert_price(payload: PriceUpdate, db: Session = Depends(get_db)):
-    symbol = payload.symbol.upper().strip()
-    coin_name = payload.coin_name.strip()
-
-    price = parse_decimal(payload.price_usd, "price_usd")
-    if price is None or price <= 0:
-        raise HTTPException(status_code=400, detail="price_usd must be > 0")
-
-    change = parse_decimal(payload.change_24h_pct, "change_24h_pct")
-    if change is None:
-        change = Decimal("0")
-
-    upsert_price_row(db, symbol, coin_name, price, change, now=datetime.now(timezone.utc))
-    db.commit()
-    return {"symbol": symbol}
 
 
 @app.post("/api/transactions")
@@ -244,7 +231,7 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     tx = Transaction(
         portfolio_id=payload.portfolio_id,
         symbol=payload.symbol.upper().strip(),
-        coin_name=payload.coin_name.strip(),
+        coin_name=resolve_coin_name(payload.symbol.upper().strip(), payload.coin_name),
         tx_type=payload.tx_type,
         quantity=quantity,
         price_usd=price,
@@ -449,6 +436,78 @@ def get_price_map(db: Session) -> dict[str, dict[str, Any]]:
         }
         for row in rows
     }
+
+
+def resolve_coin_name(symbol: str, provided_name: str | None) -> str:
+    if provided_name and provided_name.strip():
+        return provided_name.strip()
+    for item in assets_cache:
+        if item["symbol"] == symbol:
+            return item["coin_name"]
+    return symbol
+
+
+def get_assets_from_db() -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        found: dict[str, str] = {}
+        for row in db.scalars(select(AssetPrice).order_by(AssetPrice.symbol.asc())).all():
+            sym = row.symbol.upper().strip()
+            if sym:
+                found[sym] = row.coin_name or sym
+        for symbol, coin_name in db.execute(select(Transaction.symbol, Transaction.coin_name).distinct()).all():
+            sym = (symbol or "").upper().strip()
+            if sym and sym not in found:
+                found[sym] = coin_name or sym
+        return [{"symbol": k, "coin_name": v} for k, v in sorted(found.items())]
+
+
+async def fetch_binance_assets() -> list[dict[str, str]]:
+    params = {"permissions": "SPOT"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(f"{BINANCE_API_BASE}/api/v3/exchangeInfo", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    symbols = data.get("symbols", []) if isinstance(data, dict) else []
+    base_assets: set[str] = set()
+    for row in symbols:
+        if not isinstance(row, dict):
+            continue
+        if row.get("status") != "TRADING":
+            continue
+        if str(row.get("quoteAsset", "")).upper() != PRICE_SYNC_QUOTE_ASSET:
+            continue
+        base = str(row.get("baseAsset", "")).upper().strip()
+        if base:
+            base_assets.add(base)
+
+    return [{"symbol": s, "coin_name": s} for s in sorted(base_assets)]
+
+
+async def get_binance_assets(force_refresh: bool = False) -> list[dict[str, str]]:
+    global assets_cache, assets_cache_expiry
+
+    now = datetime.now(timezone.utc)
+    if not force_refresh and assets_cache and assets_cache_expiry and now < assets_cache_expiry:
+        return assets_cache
+
+    async with assets_cache_lock:
+        now = datetime.now(timezone.utc)
+        if not force_refresh and assets_cache and assets_cache_expiry and now < assets_cache_expiry:
+            return assets_cache
+        try:
+            fresh = await fetch_binance_assets()
+            if fresh:
+                assets_cache = fresh
+                assets_cache_expiry = now + timedelta(seconds=ASSET_CACHE_TTL_SECONDS)
+                return assets_cache
+        except Exception:
+            logger.exception("Failed to fetch Binance asset list")
+
+        fallback = get_assets_from_db()
+        assets_cache = fallback
+        assets_cache_expiry = now + timedelta(seconds=300)
+        return assets_cache
 
 
 def get_symbol_name_map_for_sync(db: Session) -> dict[str, str]:
