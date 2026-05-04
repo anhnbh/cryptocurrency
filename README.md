@@ -9,7 +9,7 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Tính holdings, average cost, realized/unrealized PnL.
 - Dashboard summary: current balance, 24h portfolio change, total PnL, top performer.
 - `Set Market Price` thủ công cho từng symbol (giá hiện tại + %24h).
-- Không gọi API ngoài cho dữ liệu giá. Toàn bộ dữ liệu nằm local SQLite (`./data/portfolio.db`).
+- Không gọi API ngoài cho dữ liệu giá. Toàn bộ dữ liệu nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 
 ## Chạy trên VPS bằng Docker
@@ -26,6 +26,7 @@ Mở trên internet:
 
 - `portfolio`: app FastAPI chạy nội bộ cổng `8000` (không public trực tiếp).
 - `nginx`: public cổng `80`, reverse proxy vào `portfolio:8000`.
+- `portfolio_data`: Docker named volume lưu DB bền vững qua các lần rebuild/recreate container.
 
 ## API chính
 
@@ -38,6 +39,7 @@ Mở trên internet:
 
 - Mở firewall/security group cho TCP `80`.
 - Nếu VPS đã có web server khác đang dùng port `80`, cần tắt nó hoặc đổi mapping port ở `docker-compose.yml`.
+- Không dùng `docker compose down -v` nếu muốn giữ dữ liệu cũ (`-v` sẽ xóa volume).
 
 ## Ghi chú
 

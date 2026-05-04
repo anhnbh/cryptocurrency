@@ -7,7 +7,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:///./data/portfolio.db
     volumes:
-      - ./data:/app/data
+      - portfolio_data:/app/data
     restart: unless-stopped
 
   nginx:
@@ -20,3 +20,6 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
+
+volumes:
+  portfolio_data:
