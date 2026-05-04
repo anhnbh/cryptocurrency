@@ -6,6 +6,10 @@ services:
       - "8000"
     environment:
       - DATABASE_URL=sqlite:///./data/portfolio.db
+      - PRICE_SYNC_ENABLED=true
+      - PRICE_SYNC_INTERVAL_SECONDS=300
+      - BINANCE_API_BASE=https://api.binance.com
+      - PRICE_SYNC_QUOTE_ASSET=USDT
     volumes:
       - portfolio_data:/app/data
     restart: unless-stopped

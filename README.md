@@ -8,8 +8,9 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Thêm transaction không giới hạn (`buy`, `sell`, `transfer_in`, `transfer_out`).
 - Tính holdings, average cost, realized/unrealized PnL.
 - Dashboard summary: current balance, 24h portfolio change, total PnL, top performer.
-- `Set Market Price` thủ công cho từng symbol (giá hiện tại + %24h).
-- Không gọi API ngoài cho dữ liệu giá. Toàn bộ dữ liệu nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
+- Tự động cập nhật giá hiện tại từ Binance Spot mỗi `5 phút` (mặc định) cho các symbol trong portfolio.
+- Vẫn có `Set Market Price` để override thủ công nếu cần.
+- Dữ liệu transaction/portfolio nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 
 ## Chạy trên VPS bằng Docker
@@ -27,6 +28,17 @@ Mở trên internet:
 - `portfolio`: app FastAPI chạy nội bộ cổng `8000` (không public trực tiếp).
 - `nginx`: public cổng `80`, reverse proxy vào `portfolio:8000`.
 - `portfolio_data`: Docker named volume lưu DB bền vững qua các lần rebuild/recreate container.
+
+## Auto Price Sync (Binance)
+
+Mặc định bật sẵn trong `docker-compose.yml`:
+
+- `PRICE_SYNC_ENABLED=true`
+- `PRICE_SYNC_INTERVAL_SECONDS=300`
+- `BINANCE_API_BASE=https://api.binance.com`
+- `PRICE_SYNC_QUOTE_ASSET=USDT`
+
+Ví dụ `BTC` sẽ map thành cặp `BTCUSDT`.
 
 ## API chính
 

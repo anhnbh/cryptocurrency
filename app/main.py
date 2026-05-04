@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +18,32 @@ from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, cre
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/portfolio.db")
+BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+PRICE_SYNC_QUOTE_ASSET = os.getenv("PRICE_SYNC_QUOTE_ASSET", "USDT").upper().strip()
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+PRICE_SYNC_ENABLED = env_bool("PRICE_SYNC_ENABLED", True)
+PRICE_SYNC_INTERVAL_SECONDS = max(60, env_int("PRICE_SYNC_INTERVAL_SECONDS", 300))
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("portfolio")
 
 
 class Base(DeclarativeBase):
@@ -65,6 +94,11 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
+app = FastAPI(title="Local Crypto Portfolio")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
+price_sync_task: asyncio.Task[Any] | None = None
+
 
 def get_db():
     db = SessionLocal()
@@ -97,19 +131,32 @@ class PriceUpdate(BaseModel):
     change_24h_pct: str | None = "0"
 
 
-app = FastAPI(title="Local Crypto Portfolio")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
-
-
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
+    global price_sync_task
+
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         if db.scalar(select(Portfolio.id).limit(1)) is None:
             seed = Portfolio(name="Main Portfolio")
             db.add(seed)
             db.commit()
+
+    if PRICE_SYNC_ENABLED:
+        price_sync_task = asyncio.create_task(price_sync_loop(), name="binance-price-sync")
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global price_sync_task
+
+    if price_sync_task is not None:
+        price_sync_task.cancel()
+        try:
+            await price_sync_task
+        except asyncio.CancelledError:
+            pass
+        price_sync_task = None
 
 
 @app.get("/")
@@ -157,23 +204,7 @@ def upsert_price(payload: PriceUpdate, db: Session = Depends(get_db)):
     if change is None:
         change = Decimal("0")
 
-    row = db.get(AssetPrice, symbol)
-    now = datetime.now(timezone.utc)
-    if row is None:
-        row = AssetPrice(
-            symbol=symbol,
-            coin_name=coin_name,
-            price_usd=price,
-            change_24h_pct=change,
-            updated_at=now,
-        )
-        db.add(row)
-    else:
-        row.coin_name = coin_name
-        row.price_usd = price
-        row.change_24h_pct = change
-        row.updated_at = now
-
+    upsert_price_row(db, symbol, coin_name, price, change, now=datetime.now(timezone.utc))
     db.commit()
     return {"symbol": symbol}
 
@@ -418,3 +449,115 @@ def get_price_map(db: Session) -> dict[str, dict[str, Any]]:
         }
         for row in rows
     }
+
+
+def get_symbol_name_map_for_sync(db: Session) -> dict[str, str]:
+    symbol_name: dict[str, str] = {}
+
+    for row in db.scalars(select(AssetPrice)).all():
+        symbol_name[row.symbol.upper()] = row.coin_name
+
+    for symbol, coin_name in db.execute(select(Transaction.symbol, Transaction.coin_name).distinct()).all():
+        s = (symbol or "").upper().strip()
+        if s and s not in symbol_name:
+            symbol_name[s] = coin_name or s
+
+    return symbol_name
+
+
+def upsert_price_row(
+    db: Session,
+    symbol: str,
+    coin_name: str,
+    price: Decimal,
+    change_24h_pct: Decimal,
+    now: datetime,
+) -> None:
+    row = db.get(AssetPrice, symbol)
+    if row is None:
+        db.add(
+            AssetPrice(
+                symbol=symbol,
+                coin_name=coin_name or symbol,
+                price_usd=price,
+                change_24h_pct=change_24h_pct,
+                updated_at=now,
+            )
+        )
+        return
+
+    row.coin_name = row.coin_name or coin_name or symbol
+    row.price_usd = price
+    row.change_24h_pct = change_24h_pct
+    row.updated_at = now
+
+
+async def fetch_binance_24h_ticker(client: httpx.AsyncClient, pair_symbol: str) -> dict[str, Any] | None:
+    try:
+        response = await client.get(f"{BINANCE_API_BASE}/api/v3/ticker/24hr", params={"symbol": pair_symbol})
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if isinstance(data, dict) and "lastPrice" in data and "priceChangePercent" in data:
+            return data
+    except Exception:
+        return None
+    return None
+
+
+async def run_price_sync_once() -> int:
+    with SessionLocal() as db:
+        symbol_name_map = get_symbol_name_map_for_sync(db)
+        if not symbol_name_map:
+            return 0
+
+        updated = 0
+        now = datetime.now(timezone.utc)
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            for symbol, coin_name in symbol_name_map.items():
+                if symbol == PRICE_SYNC_QUOTE_ASSET:
+                    upsert_price_row(db, symbol, coin_name, Decimal("1"), Decimal("0"), now)
+                    updated += 1
+                    continue
+
+                pair = f"{symbol}{PRICE_SYNC_QUOTE_ASSET}"
+                ticker = await fetch_binance_24h_ticker(client, pair)
+                if ticker is None:
+                    continue
+
+                try:
+                    price = Decimal(str(ticker["lastPrice"]))
+                    change = Decimal(str(ticker["priceChangePercent"]))
+                except (InvalidOperation, KeyError):
+                    continue
+
+                if price <= 0:
+                    continue
+
+                upsert_price_row(db, symbol, coin_name, price, change, now)
+                updated += 1
+
+        if updated > 0:
+            db.commit()
+
+        return updated
+
+
+async def price_sync_loop() -> None:
+    logger.info(
+        "Price sync enabled: base=%s, interval=%ss, quote=%s",
+        BINANCE_API_BASE,
+        PRICE_SYNC_INTERVAL_SECONDS,
+        PRICE_SYNC_QUOTE_ASSET,
+    )
+
+    while True:
+        try:
+            updated = await run_price_sync_once()
+            if updated > 0:
+                logger.info("Binance sync updated %s symbols", updated)
+        except Exception:
+            logger.exception("Binance price sync failed")
+
+        await asyncio.sleep(PRICE_SYNC_INTERVAL_SECONDS)
