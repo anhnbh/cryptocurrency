@@ -1,0 +1,14 @@
+services:
+  portfolio:
+    build: .
+    container_name: local-crypto-portfolio
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/portfolio.db
+      - PRICE_API_BASE=https://api.coingecko.com/api/v3
+      - PRICE_VS_CURRENCY=usd
+      - COINGECKO_DEMO_API_KEY=${COINGECKO_DEMO_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

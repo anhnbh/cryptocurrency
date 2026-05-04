@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Crypto Portfolio</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Local Portfolio Tracker</h1>
+          <p>Self-hosted, unlimited portfolios and transactions.</p>
+        </div>
+        <button id="refreshBtn" class="btn ghost">Refresh</button>
+      </header>
+
+      <section class="portfolio-strip">
+        <div id="portfolioTabs" class="tabs"></div>
+        <form id="portfolioForm" class="inline-form">
+          <input type="text" id="portfolioName" placeholder="New portfolio name" maxlength="120" required />
+          <button type="submit" class="btn primary">+ Add Portfolio</button>
+        </form>
+      </section>
+
+      <section class="summary-grid">
+        <article class="card">
+          <h3>Current Balance</h3>
+          <p id="currentBalance" class="value">$0.00</p>
+        </article>
+        <article class="card">
+          <h3>24h Portfolio Change</h3>
+          <p id="change24h" class="value">$0.00</p>
+        </article>
+        <article class="card">
+          <h3>Total Profit / Loss</h3>
+          <p id="totalPnl" class="value">$0.00</p>
+        </article>
+        <article class="card">
+          <h3>Top Performer</h3>
+          <p id="topPerformer" class="value small">-</p>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Holdings</h2>
+            <span id="holdingCount"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Coin</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>24h</th>
+                  <th>Holdings</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="holdingsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside class="panel side">
+          <h2>Add Transaction</h2>
+          <p class="muted">No hard limit. Store everything locally.</p>
+
+          <form id="txForm" class="stack-form">
+            <label>
+              Type
+              <select id="txType" required>
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+                <option value="transfer_in">Transfer In</option>
+                <option value="transfer_out">Transfer Out</option>
+              </select>
+            </label>
+
+            <label>
+              Symbol
+              <input id="symbol" type="text" placeholder="BTC" required />
+            </label>
+
+            <label>
+              Coin Name
+              <input id="coinName" type="text" placeholder="Bitcoin" required />
+            </label>
+
+            <label>
+              Quantity
+              <input id="quantity" type="number" step="any" min="0.0000000001" required />
+            </label>
+
+            <label>
+              Price (USD)
+              <input id="priceUsd" type="number" step="any" min="0" placeholder="Required for buy/sell" />
+            </label>
+
+            <label>
+              Fee (USD)
+              <input id="feeUsd" type="number" step="any" min="0" value="0" />
+            </label>
+
+            <label>
+              Time
+              <input id="txTime" type="datetime-local" required />
+            </label>
+
+            <label>
+              Note
+              <input id="note" type="text" placeholder="Optional" />
+            </label>
+
+            <button type="submit" class="btn success">Save Transaction</button>
+          </form>
+
+          <div class="recent-wrap">
+            <h3>Recent Transactions</h3>
+            <ul id="recentTx" class="recent-list"></ul>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <template id="portfolioTabTpl">
+      <button class="tab-btn"></button>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
