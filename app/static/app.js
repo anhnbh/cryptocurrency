@@ -3,12 +3,7 @@ const state = {
   assets: [],
 };
 
-const fmtUSD = (n) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  }).format(Number(n || 0));
+const fmtUSDT = (n) => `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(Number(n || 0))} USDT`;
 
 const fmtNum = (n) =>
   new Intl.NumberFormat("en-US", {
@@ -43,14 +38,14 @@ function renderTabs(portfolios, activeId) {
 }
 
 function renderSummary(summary) {
-  document.getElementById("currentBalance").textContent = fmtUSD(summary.current_balance);
+  document.getElementById("currentBalance").textContent = fmtUSDT(summary.current_balance);
 
   const change24 = document.getElementById("change24h");
-  change24.textContent = fmtUSD(summary.portfolio_change_24h);
+  change24.textContent = fmtUSDT(summary.portfolio_change_24h);
   change24.className = `value ${pnlClass(summary.portfolio_change_24h)}`;
 
   const totalPnl = document.getElementById("totalPnl");
-  const pnlTxt = `${fmtUSD(summary.total_profit_loss)} (${Number(summary.total_profit_loss_pct || 0).toFixed(2)}%)`;
+  const pnlTxt = `${fmtUSDT(summary.total_profit_loss)} (${Number(summary.total_profit_loss_pct || 0).toFixed(2)}%)`;
   totalPnl.textContent = pnlTxt;
   totalPnl.className = `value ${pnlClass(summary.total_profit_loss)}`;
 
@@ -61,8 +56,20 @@ function renderSummary(summary) {
     return;
   }
 
-  topEl.textContent = `${top.coin_name} (${top.symbol}) ${fmtUSD(top.total_pnl)}`;
+  topEl.textContent = `${top.coin_name} (${top.symbol}) ${fmtUSDT(top.total_pnl)}`;
   topEl.className = `value small ${pnlClass(top.total_pnl)}`;
+}
+
+function renderMarketUpdateInfo(data) {
+  const el = document.getElementById("marketUpdateInfo");
+  if (!el) return;
+  if (!data.price_last_updated_at) {
+    el.textContent = "Market price update: waiting for first sync...";
+    return;
+  }
+  const dt = new Date(data.price_last_updated_at).toLocaleString();
+  const intervalMin = Math.max(1, Math.round((Number(data.price_sync_interval_seconds || 300) / 60)));
+  el.textContent = `Market price update: ${dt} (${data.quote_asset || "USDT"}, auto refresh every ${intervalMin} min)`;
 }
 
 function renderHoldings(holdings) {
@@ -75,10 +82,10 @@ function renderHoldings(holdings) {
     tr.innerHTML = `
       <td><strong>${h.coin_name}</strong> ${h.symbol}</td>
       <td>${fmtNum(h.quantity)}</td>
-      <td>${fmtUSD(h.current_price)}</td>
+      <td>${fmtUSDT(h.current_price)}</td>
       <td class="${pnlClass(h.price_change_24h)}">${Number(h.price_change_24h).toFixed(2)}%</td>
-      <td>${fmtUSD(h.market_value)}</td>
-      <td class="${pnlClass(h.total_pnl)}">${fmtUSD(h.total_pnl)} (${Number(h.pnl_pct).toFixed(2)}%)</td>
+      <td>${fmtUSDT(h.market_value)}</td>
+      <td class="${pnlClass(h.total_pnl)}">${fmtUSDT(h.total_pnl)} (${Number(h.pnl_pct).toFixed(2)}%)</td>
     `;
     body.appendChild(tr);
   });
@@ -96,10 +103,10 @@ function renderTransactions(rows) {
   rows.slice(0, 20).forEach((tx) => {
     const li = document.createElement("li");
     const dt = new Date(tx.tx_time).toLocaleString();
-    const price = tx.price_usd == null ? "-" : fmtUSD(tx.price_usd);
+    const price = tx.price_usdt == null ? "-" : fmtUSDT(tx.price_usdt);
     li.innerHTML = `
       <strong>${tx.coin_name} (${tx.symbol})</strong><br>
-      ${tx.tx_type} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${fmtUSD(tx.fee_usd)}<br>
+      ${tx.tx_type} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${fmtUSDT(tx.fee_usdt)}<br>
       <small>${dt}${tx.note ? ` | ${tx.note}` : ""}</small>
     `;
     ul.appendChild(li);
@@ -150,6 +157,7 @@ async function loadState() {
   state.activePortfolioId = data.active_portfolio_id;
   renderTabs(data.portfolios, data.active_portfolio_id);
   renderSummary(data.summary);
+  renderMarketUpdateInfo(data);
   renderHoldings(data.holdings);
   renderTransactions(data.transactions);
 }
@@ -178,6 +186,15 @@ async function createTransaction(payload) {
     const err = await res.json();
     throw new Error(err.detail || "Failed to add transaction");
   }
+}
+
+async function syncNow() {
+  const res = await fetch("/api/prices/sync-now", { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || "Failed to sync prices now");
+  }
+  return res.json();
 }
 
 function bindForms() {
@@ -221,8 +238,8 @@ function bindForms() {
       symbol: selectedOption.value,
       coin_name: selectedOption.dataset.coinName || selectedOption.value,
       quantity: document.getElementById("quantity").value,
-      price_usd: document.getElementById("priceUsd").value || null,
-      fee_usd: document.getElementById("feeUsd").value || "0",
+      price_usdt: document.getElementById("priceUsdt").value || null,
+      fee_usdt: document.getElementById("feeUsdt").value || "0",
       note: document.getElementById("note").value.trim(),
       tx_time: txIso,
     };
@@ -230,7 +247,7 @@ function bindForms() {
     try {
       await createTransaction(payload);
       document.getElementById("quantity").value = "";
-      document.getElementById("priceUsd").value = "";
+      document.getElementById("priceUsdt").value = "";
       document.getElementById("note").value = "";
       setDefaultTxTime();
       await loadState();
@@ -242,6 +259,22 @@ function bindForms() {
   document.getElementById("refreshBtn").addEventListener("click", async () => {
     await loadAssets();
     await loadState();
+  });
+
+  document.getElementById("syncNowBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("syncNowBtn");
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Updating...";
+    try {
+      await syncNow();
+      await loadState();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
   });
 }
 

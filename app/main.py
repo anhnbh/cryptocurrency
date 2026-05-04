@@ -102,6 +102,7 @@ price_sync_task: asyncio.Task[Any] | None = None
 assets_cache: list[dict[str, str]] = []
 assets_cache_expiry: datetime | None = None
 assets_cache_lock = asyncio.Lock()
+price_sync_lock = asyncio.Lock()
 
 
 def get_db():
@@ -122,8 +123,10 @@ class TransactionCreate(BaseModel):
     coin_name: str | None = Field(default=None, max_length=120)
     tx_type: str = Field(pattern=r"^(buy|sell|transfer_in|transfer_out)$")
     quantity: str
+    price_usdt: str | None = None
+    fee_usdt: str | None = "0"
     price_usd: str | None = None
-    fee_usd: str | None = "0"
+    fee_usd: str | None = None
     note: str | None = ""
     tx_time: str
 
@@ -184,6 +187,18 @@ async def list_assets():
     return {"quote_asset": PRICE_SYNC_QUOTE_ASSET, "assets": assets}
 
 
+@app.post("/api/prices/sync-now")
+async def sync_prices_now():
+    updated = await run_price_sync_once()
+    with SessionLocal() as db:
+        last_updated = db.scalar(select(AssetPrice.updated_at).order_by(AssetPrice.updated_at.desc()).limit(1))
+    return {
+        "updated": updated,
+        "quote_asset": PRICE_SYNC_QUOTE_ASSET,
+        "price_last_updated_at": last_updated.isoformat() if last_updated else None,
+    }
+
+
 def parse_decimal(text: str | None, field_name: str, allow_none: bool = False) -> Decimal | None:
     if text is None or str(text).strip() == "":
         if allow_none:
@@ -206,13 +221,16 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     if quantity is None or quantity <= 0:
         raise HTTPException(status_code=400, detail="quantity must be > 0")
 
-    price = parse_decimal(payload.price_usd, "price_usd", allow_none=True)
-    fee = parse_decimal(payload.fee_usd, "fee_usd")
+    input_price = payload.price_usdt if payload.price_usdt is not None else payload.price_usd
+    input_fee = payload.fee_usdt if payload.fee_usdt is not None else payload.fee_usd
+
+    price = parse_decimal(input_price, "price_usdt", allow_none=True)
+    fee = parse_decimal(input_fee or "0", "fee_usdt")
     if fee is None or fee < 0:
-        raise HTTPException(status_code=400, detail="fee_usd must be >= 0")
+        raise HTTPException(status_code=400, detail="fee_usdt must be >= 0")
 
     if payload.tx_type in {"buy", "sell"} and (price is None or price <= 0):
-        raise HTTPException(status_code=400, detail="buy/sell requires price_usd > 0")
+        raise HTTPException(status_code=400, detail="buy/sell requires price_usdt > 0")
 
     if payload.tx_type in {"sell", "transfer_out"}:
         holdings = build_holdings_state(db, payload.portfolio_id)
@@ -274,7 +292,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
 
     for symbol, item in holdings_state.items():
         price_item = prices.get(symbol, {})
-        current_price = Decimal(str(price_item.get("price_usd", item["last_buy_price"] or 0)))
+        current_price = Decimal(str(price_item.get("price_usdt", item["last_buy_price"] or 0)))
         price_change_24h = Decimal(str(price_item.get("change_24h_pct", 0) or 0))
 
         qty = item["quantity"]
@@ -320,11 +338,15 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
     ).all()
 
     price_rows = db.scalars(select(AssetPrice).order_by(AssetPrice.symbol.asc())).all()
+    last_updated = max((p.updated_at for p in price_rows), default=None)
 
     return JSONResponse(
         {
             "portfolios": [{"id": p.id, "name": p.name} for p in portfolios],
             "active_portfolio_id": active.id,
+            "quote_asset": PRICE_SYNC_QUOTE_ASSET,
+            "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
+            "price_last_updated_at": last_updated.isoformat() if last_updated else None,
             "summary": {
                 "current_balance": float(current_balance),
                 "total_profit_loss": float((current_balance - total_cost) + total_realized),
@@ -341,7 +363,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
                 {
                     "symbol": p.symbol,
                     "coin_name": p.coin_name,
-                    "price_usd": float(p.price_usd),
+                    "price_usdt": float(p.price_usd),
                     "change_24h_pct": float(p.change_24h_pct),
                     "updated_at": p.updated_at.isoformat(),
                 }
@@ -354,8 +376,8 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
                     "coin_name": t.coin_name,
                     "tx_type": t.tx_type,
                     "quantity": float(t.quantity),
-                    "price_usd": float(t.price_usd) if t.price_usd is not None else None,
-                    "fee_usd": float(t.fee_usd),
+                    "price_usdt": float(t.price_usd) if t.price_usd is not None else None,
+                    "fee_usdt": float(t.fee_usd),
                     "note": t.note,
                     "tx_time": t.tx_time.isoformat(),
                 }
@@ -431,7 +453,7 @@ def get_price_map(db: Session) -> dict[str, dict[str, Any]]:
     rows = db.scalars(select(AssetPrice)).all()
     return {
         row.symbol.upper(): {
-            "price_usd": float(row.price_usd),
+            "price_usdt": float(row.price_usd),
             "change_24h_pct": float(row.change_24h_pct),
         }
         for row in rows
@@ -565,42 +587,43 @@ async def fetch_binance_24h_ticker(client: httpx.AsyncClient, pair_symbol: str) 
 
 
 async def run_price_sync_once() -> int:
-    with SessionLocal() as db:
-        symbol_name_map = get_symbol_name_map_for_sync(db)
-        if not symbol_name_map:
-            return 0
+    async with price_sync_lock:
+        with SessionLocal() as db:
+            symbol_name_map = get_symbol_name_map_for_sync(db)
+            if not symbol_name_map:
+                return 0
 
-        updated = 0
-        now = datetime.now(timezone.utc)
+            updated = 0
+            now = datetime.now(timezone.utc)
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            for symbol, coin_name in symbol_name_map.items():
-                if symbol == PRICE_SYNC_QUOTE_ASSET:
-                    upsert_price_row(db, symbol, coin_name, Decimal("1"), Decimal("0"), now)
+            async with httpx.AsyncClient(timeout=10) as client:
+                for symbol, coin_name in symbol_name_map.items():
+                    if symbol == PRICE_SYNC_QUOTE_ASSET:
+                        upsert_price_row(db, symbol, coin_name, Decimal("1"), Decimal("0"), now)
+                        updated += 1
+                        continue
+
+                    pair = f"{symbol}{PRICE_SYNC_QUOTE_ASSET}"
+                    ticker = await fetch_binance_24h_ticker(client, pair)
+                    if ticker is None:
+                        continue
+
+                    try:
+                        price = Decimal(str(ticker["lastPrice"]))
+                        change = Decimal(str(ticker["priceChangePercent"]))
+                    except (InvalidOperation, KeyError):
+                        continue
+
+                    if price <= 0:
+                        continue
+
+                    upsert_price_row(db, symbol, coin_name, price, change, now)
                     updated += 1
-                    continue
 
-                pair = f"{symbol}{PRICE_SYNC_QUOTE_ASSET}"
-                ticker = await fetch_binance_24h_ticker(client, pair)
-                if ticker is None:
-                    continue
+            if updated > 0:
+                db.commit()
 
-                try:
-                    price = Decimal(str(ticker["lastPrice"]))
-                    change = Decimal(str(ticker["priceChangePercent"]))
-                except (InvalidOperation, KeyError):
-                    continue
-
-                if price <= 0:
-                    continue
-
-                upsert_price_row(db, symbol, coin_name, price, change, now)
-                updated += 1
-
-        if updated > 0:
-            db.commit()
-
-        return updated
+            return updated
 
 
 async def price_sync_loop() -> None:

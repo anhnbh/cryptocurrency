@@ -12,8 +12,12 @@
         <div>
           <h1>Local Portfolio Tracker</h1>
           <p>Self-hosted, unlimited portfolios and transactions. No external price API.</p>
+          <p id="marketUpdateInfo" class="muted">Market price update: waiting for first sync...</p>
         </div>
-        <button id="refreshBtn" class="btn ghost">Refresh</button>
+        <div class="topbar-actions">
+          <button id="syncNowBtn" class="btn primary">Update Now</button>
+          <button id="refreshBtn" class="btn ghost">Refresh</button>
+        </div>
       </header>
 
       <section class="portfolio-strip">
@@ -97,13 +101,13 @@
             </label>
 
             <label>
-              Price (USD)
-              <input id="priceUsd" type="number" step="any" min="0" placeholder="Required for buy/sell" />
+              Price (USDT)
+              <input id="priceUsdt" type="number" step="any" min="0" placeholder="Required for buy/sell (USDT)" />
             </label>
 
             <label>
-              Fee (USD)
-              <input id="feeUsd" type="number" step="any" min="0" value="0" />
+              Fee (USDT)
+              <input id="feeUsdt" type="number" step="any" min="0" value="0" />
             </label>
 
             <label>

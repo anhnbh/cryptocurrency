@@ -34,6 +34,11 @@ body {
   margin-bottom: 18px;
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .topbar h1 {
   margin: 0;
   font-size: 30px;
@@ -259,6 +264,11 @@ button {
   .topbar {
     display: grid;
     gap: 8px;
+  }
+
+  .topbar-actions {
+    grid-auto-flow: column;
+    justify-content: start;
   }
 
   .summary-grid {
