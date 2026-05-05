@@ -493,6 +493,57 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
     }
 
 
+def build_portfolio_performance_points(
+    db: Session, portfolio_id: int, prices: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    txs = db.scalars(
+        select(Transaction)
+        .where(Transaction.portfolio_id == portfolio_id)
+        .order_by(Transaction.tx_time.asc(), Transaction.id.asc())
+    ).all()
+    if not txs:
+        return []
+
+    qty_map: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    points: list[dict[str, Any]] = []
+
+    def snapshot_value() -> Decimal:
+        total = Decimal("0")
+        for symbol, qty in qty_map.items():
+            if qty <= 0:
+                continue
+            current_price = Decimal(str(prices.get(symbol, {}).get("price_usdt", 0) or 0))
+            total += qty * current_price
+        return total
+
+    for tx in txs:
+        symbol = tx.symbol.upper()
+        qty = Decimal(tx.quantity)
+        fee = Decimal(tx.fee_usd)
+        fee_currency = (tx.fee_currency or PRICE_SYNC_QUOTE_ASSET).upper()
+
+        if tx.tx_type in {"buy", "transfer_in"}:
+            received_qty = qty - fee if fee_currency == symbol else qty
+            if received_qty < 0:
+                received_qty = Decimal("0")
+            qty_map[symbol] += received_qty
+        elif tx.tx_type in {"sell", "transfer_out"}:
+            qty_map[symbol] -= qty
+            if qty_map[symbol] < 0:
+                qty_map[symbol] = Decimal("0")
+
+        points.append(
+            {
+                "ts": to_utc_iso(tx.tx_time),
+                "value_usdt": float(snapshot_value()),
+            }
+        )
+
+    now = datetime.now(timezone.utc)
+    points.append({"ts": to_utc_iso(now), "value_usdt": float(snapshot_value())})
+    return points
+
+
 def build_portfolio_snapshot(
     db: Session,
     portfolio: Portfolio,
@@ -578,6 +629,8 @@ def build_portfolio_snapshot(
             for t in tx_rows
         ]
 
+    performance_points = build_portfolio_performance_points(db, portfolio.id, prices)
+
     return {
         "portfolio_id": portfolio.id,
         "portfolio_name": portfolio.name,
@@ -590,6 +643,7 @@ def build_portfolio_snapshot(
         },
         "holdings": holdings,
         "transactions": transactions,
+        "performance_points": performance_points,
         "_metrics": {
             "current_balance": current_balance,
             "total_cost": total_cost,
@@ -663,6 +717,7 @@ def portfolio_state(portfolio_id: int | None = None, include_overview: bool = Fa
                     "portfolio_name": p.name,
                     "summary": snap["summary"],
                     "holdings": snap["holdings"],
+                    "performance_points": snap["performance_points"],
                 }
             )
             metrics = snap["_metrics"]

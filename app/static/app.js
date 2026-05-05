@@ -312,6 +312,25 @@ function renderOverviewDonut(holdings) {
   const rInner = 48;
   let start = -Math.PI / 2;
 
+  if (rows.length === 1) {
+    const oneLabel = formatCoinInline(rows[0].coin_name, rows[0].symbol);
+    return `
+      <div class="ov-donut-wrap">
+        <svg viewBox="0 0 220 220" class="ov-donut-chart" aria-label="Holdings allocation">
+          <circle cx="${cx}" cy="${cy}" r="${(rOuter + rInner) / 2}" fill="none" stroke="#f08a4b" stroke-width="${rOuter - rInner}"></circle>
+          <circle cx="${cx}" cy="${cy}" r="${rInner - 2}" fill="#0c1a2c"></circle>
+        </svg>
+        <ul class="ov-legend">
+          <li>
+            <span class="dot" style="background:#f08a4b"></span>
+            <span>${oneLabel}</span>
+            <span>100.00%</span>
+          </li>
+        </ul>
+      </div>
+    `;
+  }
+
   const slices = rows
     .slice(0, 8)
     .map((h, idx) => {
@@ -352,59 +371,97 @@ function renderOverviewDonut(holdings) {
   `;
 }
 
-function renderOverviewPerformance24h(holdings) {
-  const rows = (holdings || []).filter((h) => Number(h.market_value || 0) > 0);
-  if (!rows.length) {
+const PERF_PERIODS = {
+  "24H": 24 * 60 * 60 * 1000,
+  "7D": 7 * 24 * 60 * 60 * 1000,
+  "1M": 30 * 24 * 60 * 60 * 1000,
+  "3M": 90 * 24 * 60 * 60 * 1000,
+  "1Y": 365 * 24 * 60 * 60 * 1000,
+};
+
+function parsePerfPoints(performancePoints) {
+  return (performancePoints || [])
+    .map((p) => ({
+      ts: new Date(p.ts).getTime(),
+      value: Number(p.value_usdt || 0),
+    }))
+    .filter((p) => Number.isFinite(p.ts) && Number.isFinite(p.value))
+    .sort((a, b) => a.ts - b.ts);
+}
+
+function filterPerfByPeriod(points, periodKey) {
+  if (!points.length) return [];
+  const now = points[points.length - 1].ts;
+  const from = now - (PERF_PERIODS[periodKey] || PERF_PERIODS["24H"]);
+  const filtered = points.filter((p) => p.ts >= from);
+  if (!filtered.length) {
+    return [points[0], points[points.length - 1]];
+  }
+  const before = [...points].reverse().find((p) => p.ts < from);
+  if (before) filtered.unshift(before);
+  return filtered;
+}
+
+function renderOverviewPerformanceChart(performancePoints, periodKey = "24H") {
+  const source = parsePerfPoints(performancePoints);
+  if (!source.length) {
     return '<div class="muted">No performance data yet.</div>';
   }
 
-  const current = rows.reduce((acc, h) => acc + Number(h.market_value || 0), 0);
-  const prev24h = rows.reduce((acc, h) => {
-    const mv = Number(h.market_value || 0);
-    const ch = Number(h.price_change_24h || 0) / 100;
-    const base = 1 + ch;
-    return acc + (base !== 0 ? mv / base : mv);
-  }, 0);
-
-  const points = [];
-  const sampleCount = 30;
-  const drift = current - prev24h;
-  for (let i = 0; i < sampleCount; i += 1) {
-    const t = i / (sampleCount - 1);
-    const wobble = Math.sin(t * Math.PI * 5) * drift * 0.06;
-    points.push(prev24h + drift * t + wobble);
+  const picked = filterPerfByPeriod(source, periodKey);
+  if (picked.length < 2) {
+    const single = picked[0] || source[0];
+    picked.push({ ts: Date.now(), value: single.value });
   }
 
-  const min = Math.min(...points);
-  const max = Math.max(...points);
+  const values = picked.map((p) => p.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const pad = (max - min) * 0.12 || 1;
   const lo = min - pad;
   const hi = max + pad;
   const w = 620;
   const h = 210;
 
-  const xy = points.map((v, i) => {
-    const x = (i / (sampleCount - 1)) * (w - 24) + 12;
-    const y = h - ((v - lo) / (hi - lo)) * (h - 24) - 12;
+  const firstTs = picked[0].ts;
+  const lastTs = picked[picked.length - 1].ts;
+  const tsSpan = Math.max(1, lastTs - firstTs);
+  const xy = picked.map((p) => {
+    const x = ((p.ts - firstTs) / tsSpan) * (w - 24) + 12;
+    const y = h - ((p.value - lo) / (hi - lo)) * (h - 24) - 12;
     return { x, y };
   });
 
   const line = xy.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
   const area = `${line} L ${xy[xy.length - 1].x} ${h - 8} L ${xy[0].x} ${h - 8} Z`;
-  const pnl = current - prev24h;
-  const pnlPct = prev24h > 0 ? (pnl / prev24h) * 100 : 0;
+  const firstValue = values[0];
+  const lastValue = values[values.length - 1];
+  const pnl = lastValue - firstValue;
+  const pnlPct = firstValue > 0 ? (pnl / firstValue) * 100 : 0;
+
+  const pills = Object.keys(PERF_PERIODS)
+    .map((k) => `<button type="button" class="pill ${k === periodKey ? "active" : ""}" data-period="${k}">${k}</button>`)
+    .join("");
+
+  const leftLabelMap = {
+    "24H": "24h ago",
+    "7D": "7d ago",
+    "1M": "1m ago",
+    "3M": "3m ago",
+    "1Y": "1y ago",
+  };
 
   return `
     <div class="ov-perf-head">
-      <span class="pill active">24H</span>
+      <div class="ov-pills">${pills}</div>
       <span class="muted ${pnlClass(pnl)}">${fmtQuote(pnl)} (${fmtPct(pnlPct)})</span>
     </div>
-    <svg viewBox="0 0 ${w} ${h}" class="ov-line-chart" aria-label="Estimated 24h performance">
+    <svg viewBox="0 0 ${w} ${h}" class="ov-line-chart" aria-label="Portfolio performance">
       <path d="${area}" class="ov-area"></path>
       <path d="${line}" class="ov-line"></path>
     </svg>
     <div class="ov-axis">
-      <span>24h ago</span>
+      <span>${leftLabelMap[periodKey] || "Start"}</span>
       <span>Now</span>
     </div>
   `;
@@ -490,12 +547,27 @@ function renderOverview(overview) {
         <h3>Total Holdings</h3>
         ${renderOverviewDonut(item.holdings)}
       </article>
-      <article class="card chart-card">
+      <article class="card chart-card perf-card">
         <h3>Total Performance</h3>
-        ${renderOverviewPerformance24h(item.holdings)}
+        <div class="perf-content">${renderOverviewPerformanceChart(item.performance_points, "24H")}</div>
       </article>
     `;
     panel.appendChild(chartGrid);
+
+    const perfCard = chartGrid.querySelector(".perf-card");
+    if (perfCard) {
+      perfCard.querySelectorAll(".pill").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const period = btn.dataset.period || "24H";
+          const content = perfCard.querySelector(".perf-content");
+          if (!content) return;
+          content.innerHTML = renderOverviewPerformanceChart(item.performance_points, period);
+          perfCard.querySelectorAll(".pill").forEach((x) => x.classList.remove("active"));
+          const active = perfCard.querySelector(`.pill[data-period="${period}"]`);
+          if (active) active.classList.add("active");
+        });
+      });
+    }
 
     const tableWrap = document.createElement("div");
     tableWrap.className = "table-wrap";
