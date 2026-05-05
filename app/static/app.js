@@ -61,6 +61,26 @@ function formatSignedQuantity(value) {
   return `${prefix}${fmtNum(num)}`;
 }
 
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function formatCoinInline(coinName, symbol) {
+  const sym = normalizeText(symbol).toUpperCase();
+  const name = normalizeText(coinName);
+  if (!name) return sym;
+  if (name.toUpperCase() === sym) return sym;
+  return `${name} ${sym}`;
+}
+
+function formatCoinTitle(coinName, symbol) {
+  const sym = normalizeText(symbol).toUpperCase();
+  const name = normalizeText(coinName);
+  if (!name) return sym;
+  if (name.toUpperCase() === sym) return sym;
+  return `${name} (${sym})`;
+}
+
 function getSelectedAssetSymbol() {
   const select = document.getElementById("assetSelect");
   if (!select || select.selectedIndex < 0) return state.quoteAsset;
@@ -239,7 +259,7 @@ function renderSummary(summary) {
     return;
   }
 
-  topEl.textContent = `${top.coin_name} (${top.symbol}) ${fmtQuote(top.total_pnl)}`;
+  topEl.textContent = `${formatCoinTitle(top.coin_name, top.symbol)} ${fmtQuote(top.total_pnl)}`;
   topEl.className = `value small ${pnlClass(top.total_pnl)}`;
 }
 
@@ -279,7 +299,7 @@ function renderHoldings(holdings) {
     const tr = document.createElement("tr");
 
     const cells = [
-      `<button type="button" class="coin-link">${h.coin_name} ${h.symbol}</button>`,
+      `<button type="button" class="coin-link">${formatCoinInline(h.coin_name, h.symbol)}</button>`,
       fmtNum(h.quantity),
       fmtQuote(h.current_price),
       `<span class="${pnlClass(h.price_change_24h)}">${fmtPct(h.price_change_24h)}</span>`,
@@ -353,7 +373,7 @@ function renderTransactions(rows) {
     const feeCurrency = tx.fee_currency || state.quoteAsset;
     const feeText = `${fmtNum(tx.fee_usdt, 10)} ${feeCurrency}`;
     li.innerHTML = `
-      <strong>${tx.coin_name} (${tx.symbol})</strong><br>
+      <strong>${formatCoinTitle(tx.coin_name, tx.symbol)}</strong><br>
       ${formatType(tx.tx_type)} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${feeText}<br>
       <small>${dt} (UTC+7)${tx.note ? ` | ${tx.note}` : ""}</small>
     `;
@@ -407,8 +427,9 @@ function hideCoinDetail(syncHash = true) {
 function renderCoinDetail(detail) {
   showDetailView();
 
-  document.getElementById("coinDetailBread").textContent = `Portfolio > ${detail.portfolio_name} > ${detail.coin_name} Transaction Overview`;
-  document.getElementById("coinDetailTitle").textContent = `${detail.coin_name} (${detail.symbol})`;
+  const coinLabelTitle = formatCoinTitle(detail.coin_name, detail.symbol);
+  document.getElementById("coinDetailBread").textContent = `Portfolio > ${detail.portfolio_name} > ${coinLabelTitle} Transaction Overview`;
+  document.getElementById("coinDetailTitle").textContent = coinLabelTitle;
 
   const priceEl = document.getElementById("coinDetailPrice");
   priceEl.textContent = `${fmtQuote(detail.price_usdt)} ${fmtPct(detail.price_change_24h)}`;

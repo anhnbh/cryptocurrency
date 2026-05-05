@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Crypto Portfolio</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260505d" />
+    <link rel="stylesheet" href="/static/style.css?v=20260505e" />
   </head>
   <body>
     <main class="app-shell">
@@ -16,6 +16,7 @@
             <p id="marketUpdateInfo" class="muted">Market price update: waiting for first sync...</p>
           </div>
           <div class="topbar-actions">
+            <button type="button" id="openTxModalBtn" class="btn primary">+ Add Transaction</button>
             <button type="button" id="syncNowBtn" class="btn primary">Update Now</button>
             <button type="button" id="refreshBtn" class="btn ghost">Refresh</button>
           </div>
@@ -75,7 +76,6 @@
           <aside class="panel side">
             <div class="panel-head">
               <h2>Add Transaction</h2>
-              <button type="button" id="openTxModalBtn" class="btn primary small">+ Add Transaction</button>
             </div>
             <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
 
@@ -216,6 +216,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=20260505d"></script>
+    <script src="/static/app.js?v=20260505e"></script>
   </body>
 </html>
