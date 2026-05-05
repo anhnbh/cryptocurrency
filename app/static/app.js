@@ -270,6 +270,146 @@ function renderTabs(portfolios, activeId) {
   });
 }
 
+function donutSlicePath(cx, cy, rOuter, rInner, startAngle, endAngle) {
+  const startOuter = {
+    x: cx + rOuter * Math.cos(startAngle),
+    y: cy + rOuter * Math.sin(startAngle),
+  };
+  const endOuter = {
+    x: cx + rOuter * Math.cos(endAngle),
+    y: cy + rOuter * Math.sin(endAngle),
+  };
+  const startInner = {
+    x: cx + rInner * Math.cos(endAngle),
+    y: cy + rInner * Math.sin(endAngle),
+  };
+  const endInner = {
+    x: cx + rInner * Math.cos(startAngle),
+    y: cy + rInner * Math.sin(startAngle),
+  };
+  const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
+  return [
+    `M ${startOuter.x} ${startOuter.y}`,
+    `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${endOuter.x} ${endOuter.y}`,
+    `L ${startInner.x} ${startInner.y}`,
+    `A ${rInner} ${rInner} 0 ${largeArc} 0 ${endInner.x} ${endInner.y}`,
+    "Z",
+  ].join(" ");
+}
+
+function renderOverviewDonut(holdings) {
+  const rows = (holdings || []).filter((h) => Number(h.market_value || 0) > 0);
+  if (!rows.length) {
+    return '<div class="muted">No holdings yet.</div>';
+  }
+
+  const total = rows.reduce((acc, h) => acc + Number(h.market_value || 0), 0);
+  const palette = ["#f08a4b", "#f2d14a", "#e46b93", "#8d7cf7", "#56d6c2", "#f6a3bb", "#7da7ff", "#d79bf4"];
+
+  const cx = 110;
+  const cy = 110;
+  const rOuter = 82;
+  const rInner = 48;
+  let start = -Math.PI / 2;
+
+  const slices = rows
+    .slice(0, 8)
+    .map((h, idx) => {
+      const pct = total > 0 ? Number(h.market_value || 0) / total : 0;
+      const end = start + pct * Math.PI * 2;
+      const path = donutSlicePath(cx, cy, rOuter, rInner, start, end);
+      const color = palette[idx % palette.length];
+      start = end;
+      return {
+        path,
+        color,
+        label: formatCoinInline(h.coin_name, h.symbol),
+        pct: pct * 100,
+      };
+    });
+
+  const legend = slices
+    .map(
+      (s) => `
+        <li>
+          <span class="dot" style="background:${s.color}"></span>
+          <span>${s.label}</span>
+          <span>${fmtPct(s.pct)}</span>
+        </li>
+      `
+    )
+    .join("");
+
+  const svgPaths = slices.map((s) => `<path d="${s.path}" fill="${s.color}"></path>`).join("");
+  return `
+    <div class="ov-donut-wrap">
+      <svg viewBox="0 0 220 220" class="ov-donut-chart" aria-label="Holdings allocation">
+        ${svgPaths}
+        <circle cx="${cx}" cy="${cy}" r="${rInner - 2}" fill="#0c1a2c"></circle>
+      </svg>
+      <ul class="ov-legend">${legend}</ul>
+    </div>
+  `;
+}
+
+function renderOverviewPerformance24h(holdings) {
+  const rows = (holdings || []).filter((h) => Number(h.market_value || 0) > 0);
+  if (!rows.length) {
+    return '<div class="muted">No performance data yet.</div>';
+  }
+
+  const current = rows.reduce((acc, h) => acc + Number(h.market_value || 0), 0);
+  const prev24h = rows.reduce((acc, h) => {
+    const mv = Number(h.market_value || 0);
+    const ch = Number(h.price_change_24h || 0) / 100;
+    const base = 1 + ch;
+    return acc + (base !== 0 ? mv / base : mv);
+  }, 0);
+
+  const points = [];
+  const sampleCount = 30;
+  const drift = current - prev24h;
+  for (let i = 0; i < sampleCount; i += 1) {
+    const t = i / (sampleCount - 1);
+    const wobble = Math.sin(t * Math.PI * 5) * drift * 0.06;
+    points.push(prev24h + drift * t + wobble);
+  }
+
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const pad = (max - min) * 0.12 || 1;
+  const lo = min - pad;
+  const hi = max + pad;
+  const w = 620;
+  const h = 210;
+
+  const xy = points.map((v, i) => {
+    const x = (i / (sampleCount - 1)) * (w - 24) + 12;
+    const y = h - ((v - lo) / (hi - lo)) * (h - 24) - 12;
+    return { x, y };
+  });
+
+  const line = xy.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const area = `${line} L ${xy[xy.length - 1].x} ${h - 8} L ${xy[0].x} ${h - 8} Z`;
+  const pnl = current - prev24h;
+  const pnlPct = prev24h > 0 ? (pnl / prev24h) * 100 : 0;
+
+  return `
+    <div class="ov-perf-head">
+      <span class="pill active">24H</span>
+      <span class="muted ${pnlClass(pnl)}">${fmtQuote(pnl)} (${fmtPct(pnlPct)})</span>
+    </div>
+    <svg viewBox="0 0 ${w} ${h}" class="ov-line-chart" aria-label="Estimated 24h performance">
+      <path d="${area}" class="ov-area"></path>
+      <path d="${line}" class="ov-line"></path>
+    </svg>
+    <div class="ov-axis">
+      <span>24h ago</span>
+      <span>Now</span>
+    </div>
+  `;
+}
+
 function renderOverview(overview) {
   const summary = overview?.summary || {
     current_balance: 0,
@@ -342,6 +482,20 @@ function renderOverview(overview) {
       </article>
     `;
     panel.appendChild(summaryGrid);
+
+    const chartGrid = document.createElement("div");
+    chartGrid.className = "overview-charts";
+    chartGrid.innerHTML = `
+      <article class="card chart-card">
+        <h3>Total Holdings</h3>
+        ${renderOverviewDonut(item.holdings)}
+      </article>
+      <article class="card chart-card">
+        <h3>Total Performance</h3>
+        ${renderOverviewPerformance24h(item.holdings)}
+      </article>
+    `;
+    panel.appendChild(chartGrid);
 
     const tableWrap = document.createElement("div");
     tableWrap.className = "table-wrap";

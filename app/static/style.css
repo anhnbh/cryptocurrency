@@ -108,6 +108,103 @@ body {
   font-size: 17px;
 }
 
+.overview-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.chart-card h3 {
+  margin-bottom: 12px;
+}
+
+.ov-donut-wrap {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.ov-donut-chart {
+  width: 220px;
+  height: 220px;
+}
+
+.ov-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.ov-legend li {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ov-legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.ov-perf-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.pill.active {
+  color: var(--txt);
+  background: #152a43;
+}
+
+.ov-line-chart {
+  width: 100%;
+  height: 210px;
+  border: 1px solid rgba(159, 179, 202, 0.2);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(66, 149, 255, 0.08), rgba(66, 149, 255, 0.02));
+}
+
+.ov-area {
+  fill: rgba(66, 149, 255, 0.2);
+}
+
+.ov-line {
+  fill: none;
+  stroke: #4ecb79;
+  stroke-width: 2.2;
+}
+
+.ov-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
 .card {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -372,6 +469,10 @@ body.modal-open {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .overview-charts {
+    grid-template-columns: 1fr;
+  }
+
   .content-grid {
     grid-template-columns: 1fr;
   }
@@ -398,6 +499,11 @@ body.modal-open {
 
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .ov-donut-wrap {
+    grid-template-columns: 1fr;
+    justify-items: center;
   }
 
   .inline-form {
