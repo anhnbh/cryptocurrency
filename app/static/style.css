@@ -249,14 +249,14 @@ body {
 }
 
 .ov-tip-time {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   color: var(--txt);
 }
 
 .ov-tip-value {
-  font-size: 36px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--txt);
 }
