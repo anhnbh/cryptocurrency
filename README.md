@@ -15,6 +15,9 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Có nút `Delete` coin khỏi portfolio (xóa toàn bộ transaction của coin đó trong portfolio hiện tại).
 - Detail coin mở thành màn hình riêng, có nút `Back` về home.
 - Form Add Transaction thu gọn, bấm nút mới xổ khung nhập.
+- Quy tắc phí giao dịch:
+  - `Buy` / `Transfer In`: phí theo coin base (ví dụ mua BTC thì phí BTC, mua DOT thì phí DOT).
+  - `Sell` / `Transfer Out`: phí theo quote asset (`USDT`).
 - Dữ liệu transaction/portfolio nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 

@@ -61,6 +61,26 @@ function formatSignedQuantity(value) {
   return `${prefix}${fmtNum(num)}`;
 }
 
+function getSelectedAssetSymbol() {
+  const select = document.getElementById("assetSelect");
+  if (!select || select.selectedIndex < 0) return state.quoteAsset;
+  const option = select.options[select.selectedIndex];
+  return option?.value || state.quoteAsset;
+}
+
+function getFeeCurrencyForForm() {
+  const txType = document.getElementById("txType").value;
+  const symbol = getSelectedAssetSymbol();
+  if (txType === "buy" || txType === "transfer_in") return symbol;
+  return state.quoteAsset;
+}
+
+function refreshFeeLabel() {
+  const label = document.getElementById("feeLabel");
+  if (!label) return;
+  label.textContent = `Fee (${getFeeCurrencyForForm()})`;
+}
+
 function buildHomeHash() {
   return "#/home";
 }
@@ -251,9 +271,11 @@ function renderTransactions(rows) {
     const li = document.createElement("li");
     const dt = formatDateUTC7(tx.tx_time);
     const price = tx.price_usdt == null ? "-" : fmtQuote(tx.price_usdt);
+    const feeCurrency = tx.fee_currency || state.quoteAsset;
+    const feeText = `${fmtNum(tx.fee_usdt, 10)} ${feeCurrency}`;
     li.innerHTML = `
       <strong>${tx.coin_name} (${tx.symbol})</strong><br>
-      ${formatType(tx.tx_type)} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${fmtQuote(tx.fee_usdt)}<br>
+      ${formatType(tx.tx_type)} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${feeText}<br>
       <small>${dt} (UTC+7)${tx.note ? ` | ${tx.note}` : ""}</small>
     `;
     ul.appendChild(li);
@@ -282,11 +304,13 @@ function filterAssets() {
   const keyword = document.getElementById("assetSearch").value.trim().toUpperCase();
   if (!keyword) {
     renderAssetOptions(state.assets);
+    refreshFeeLabel();
     return;
   }
 
   const filtered = state.assets.filter((a) => a.symbol.includes(keyword));
   renderAssetOptions(filtered);
+  refreshFeeLabel();
 }
 
 function hideCoinDetail(syncHash = true) {
@@ -326,13 +350,15 @@ function renderCoinDetail(detail) {
     const proceeds = tx.proceeds_usdt == null ? "-" : fmtQuote(tx.proceeds_usdt);
     const pnl = tx.pnl_usdt == null ? "-" : fmtQuote(tx.pnl_usdt);
     const dt = formatDateUTC7(tx.tx_time);
+    const feeCurrency = tx.fee_currency || state.quoteAsset;
+    const feeText = `${fmtNum(tx.fee_usdt, 10)} ${feeCurrency}`;
 
     tr.innerHTML = `
       <td class="${tx.tx_type === "buy" ? "green" : tx.tx_type === "sell" ? "red" : ""}">${formatType(tx.tx_type)}</td>
       <td>${price}</td>
       <td class="${pnlClass(tx.quantity_signed)}">${formatSignedQuantity(tx.quantity_signed)}</td>
       <td>${dt}</td>
-      <td>${fmtQuote(tx.fee_usdt)}</td>
+      <td>${feeText}</td>
       <td>${cost}</td>
       <td>${proceeds}</td>
       <td class="${tx.pnl_usdt == null ? "" : pnlClass(tx.pnl_usdt)}">${pnl}</td>
@@ -348,6 +374,7 @@ async function loadAssets() {
   state.quoteAsset = data.quote_asset || "USDT";
   state.assets = data.assets || [];
   renderAssetOptions(state.assets);
+  refreshFeeLabel();
 }
 
 async function loadState() {
@@ -467,6 +494,8 @@ function bindForms() {
   });
 
   document.getElementById("assetSearch").addEventListener("input", filterAssets);
+  document.getElementById("assetSelect").addEventListener("change", refreshFeeLabel);
+  document.getElementById("txType").addEventListener("change", refreshFeeLabel);
 
   document.getElementById("txForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -494,6 +523,7 @@ function bindForms() {
       quantity: document.getElementById("quantity").value,
       price_usdt: document.getElementById("priceUsdt").value || null,
       fee_usdt: document.getElementById("feeUsdt").value || "0",
+      fee_currency: getFeeCurrencyForForm(),
       note: document.getElementById("note").value.trim(),
       tx_time: txIso,
     };

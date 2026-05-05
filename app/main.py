@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, delete, select
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, delete, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from zoneinfo import ZoneInfo
 
@@ -80,6 +80,7 @@ class Transaction(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     price_usd: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     fee_usd: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False, default=Decimal("0"))
+    fee_currency: Mapped[str] = mapped_column(String(30), nullable=False, default=PRICE_SYNC_QUOTE_ASSET)
     note: Mapped[str | None] = mapped_column(Text(), nullable=True)
     tx_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -136,6 +137,7 @@ class TransactionCreate(BaseModel):
     fee_usdt: str | None = "0"
     price_usd: str | None = None
     fee_usd: str | None = None
+    fee_currency: str | None = None
     note: str | None = ""
     tx_time: str
 
@@ -145,6 +147,7 @@ async def startup() -> None:
     global price_sync_task, price_stream_task
 
     Base.metadata.create_all(bind=engine)
+    ensure_schema_migrations()
     with SessionLocal() as db:
         if db.scalar(select(Portfolio.id).limit(1)) is None:
             seed = Portfolio(name="Main Portfolio")
@@ -178,6 +181,22 @@ async def shutdown() -> None:
         except asyncio.CancelledError:
             pass
         price_stream_task = None
+
+
+def _table_has_column(db: Session, table_name: str, column_name: str) -> bool:
+    rows = db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return any(str(r[1]).lower() == column_name.lower() for r in rows)
+
+
+def ensure_schema_migrations() -> None:
+    with SessionLocal() as db:
+        if not _table_has_column(db, "transactions", "fee_currency"):
+            db.execute(text("ALTER TABLE transactions ADD COLUMN fee_currency VARCHAR(30)"))
+            db.execute(
+                text("UPDATE transactions SET fee_currency = :quote WHERE fee_currency IS NULL OR fee_currency = ''"),
+                {"quote": PRICE_SYNC_QUOTE_ASSET},
+            )
+            db.commit()
 
 
 @app.get("/")
@@ -248,11 +267,33 @@ def to_display_tz_text(dt: datetime) -> str:
     return dt.astimezone(DISPLAY_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
 
+def normalize_fee_currency(tx_type: str, symbol: str, fee_currency_input: str | None) -> str:
+    symbol = symbol.upper().strip()
+    quote = PRICE_SYNC_QUOTE_ASSET
+    raw = (fee_currency_input or "").upper().strip()
+
+    if tx_type in {"buy", "transfer_in"}:
+        fee_currency = raw or symbol
+        if fee_currency != symbol:
+            raise HTTPException(status_code=400, detail=f"{tx_type} fee must be in {symbol}")
+        return fee_currency
+
+    if tx_type in {"sell", "transfer_out"}:
+        fee_currency = raw or quote
+        if fee_currency != quote:
+            raise HTTPException(status_code=400, detail=f"{tx_type} fee must be in {quote}")
+        return fee_currency
+
+    return raw or quote
+
+
 @app.post("/api/transactions")
 def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
     portfolio = db.get(Portfolio, payload.portfolio_id)
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    symbol = payload.symbol.upper().strip()
 
     quantity = parse_decimal(payload.quantity, "quantity")
     if quantity is None or quantity <= 0:
@@ -266,16 +307,21 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     if fee is None or fee < 0:
         raise HTTPException(status_code=400, detail="fee_usdt must be >= 0")
 
+    fee_currency = normalize_fee_currency(payload.tx_type, symbol, payload.fee_currency)
+
     if payload.tx_type in {"buy", "sell"} and (price is None or price <= 0):
         raise HTTPException(status_code=400, detail="buy/sell requires price_usdt > 0")
 
+    if payload.tx_type in {"buy", "transfer_in"} and fee_currency == symbol and fee >= quantity:
+        raise HTTPException(status_code=400, detail=f"{payload.tx_type} fee ({symbol}) must be smaller than quantity")
+
     if payload.tx_type in {"sell", "transfer_out"}:
         holdings = build_holdings_state(db, payload.portfolio_id)
-        held_qty = Decimal(str(holdings.get(payload.symbol.upper(), {}).get("quantity", 0)))
+        held_qty = Decimal(str(holdings.get(symbol, {}).get("quantity", 0)))
         if held_qty < quantity:
             raise HTTPException(
                 status_code=400,
-                detail=f"Not enough {payload.symbol.upper()} to {payload.tx_type}. Holding: {held_qty}",
+                detail=f"Not enough {symbol} to {payload.tx_type}. Holding: {held_qty}",
             )
 
     try:
@@ -285,12 +331,13 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
 
     tx = Transaction(
         portfolio_id=payload.portfolio_id,
-        symbol=payload.symbol.upper().strip(),
-        coin_name=resolve_coin_name(payload.symbol.upper().strip(), payload.coin_name),
+        symbol=symbol,
+        coin_name=resolve_coin_name(symbol, payload.coin_name),
         tx_type=payload.tx_type,
         quantity=quantity,
         price_usd=price,
         fee_usd=fee,
+        fee_currency=fee_currency,
         note=(payload.note or "").strip() or None,
         tx_time=tx_time,
     )
@@ -370,6 +417,7 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
     for tx in txs:
         qty = Decimal(tx.quantity)
         fee = Decimal(tx.fee_usd)
+        fee_currency = (tx.fee_currency or PRICE_SYNC_QUOTE_ASSET).upper()
         price = Decimal(tx.price_usd) if tx.price_usd is not None else Decimal("0")
         tx_cost: Decimal | None = None
         tx_proceeds: Decimal | None = None
@@ -377,19 +425,20 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
         signed_qty = qty
 
         if tx.tx_type in {"buy", "transfer_in"}:
-            tx_cost = qty * price + fee
+            received_qty = qty - fee if fee_currency == coin_symbol else qty
+            if received_qty < Decimal("0"):
+                received_qty = Decimal("0")
+            signed_qty = received_qty
+            tx_cost = qty * price + (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             tx_proceeds = Decimal("0")
-            # Show unrealized component for buy lots using current mark price.
-            tx_pnl = (current_price - price) * qty - fee
-            run_qty += qty
+            tx_pnl = (current_price - price) * received_qty - (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
+            run_qty += received_qty
             run_cost += tx_cost
-            if tx.tx_type == "transfer_in":
-                signed_qty = qty
         elif tx.tx_type == "sell":
             signed_qty = -qty
             avg_cost = (run_cost / run_qty) if run_qty > 0 else Decimal("0")
             removed_cost = avg_cost * qty
-            tx_proceeds = qty * price - fee
+            tx_proceeds = qty * price - (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             tx_pnl = tx_proceeds - removed_cost
             run_qty -= qty
             run_cost -= removed_cost
@@ -398,7 +447,7 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
             avg_cost = (run_cost / run_qty) if run_qty > 0 else Decimal("0")
             removed_cost = avg_cost * qty
             tx_proceeds = Decimal("0")
-            tx_pnl = -fee
+            tx_pnl = -(fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             run_qty -= qty
             run_cost -= removed_cost
 
@@ -415,6 +464,7 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
                 "quantity_signed": float(signed_qty),
                 "quantity": float(qty),
                 "fee_usdt": float(fee),
+                "fee_currency": fee_currency,
                 "cost_usdt": float(tx_cost) if tx_cost is not None else None,
                 "proceeds_usdt": float(tx_proceeds) if tx_proceeds is not None else None,
                 "pnl_usdt": float(tx_pnl) if tx_pnl is not None else None,
@@ -558,6 +608,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
                     "quantity": float(t.quantity),
                     "price_usdt": float(t.price_usd) if t.price_usd is not None else None,
                     "fee_usdt": float(t.fee_usd),
+                    "fee_currency": t.fee_currency or PRICE_SYNC_QUOTE_ASSET,
                     "note": t.note,
                     "tx_time": to_utc_iso(t.tx_time),
                 }
@@ -590,15 +641,22 @@ def build_holdings_state(db: Session, portfolio_id: int, include_zero: bool = Fa
         row["coin_name"] = tx.coin_name
         qty = Decimal(tx.quantity)
         fee = Decimal(tx.fee_usd)
+        fee_currency = (tx.fee_currency or PRICE_SYNC_QUOTE_ASSET).upper()
         price = Decimal(tx.price_usd) if tx.price_usd is not None else Decimal("0")
 
         if tx.tx_type == "buy":
-            row["quantity"] += qty
-            row["cost_basis"] += qty * price + fee
+            received_qty = qty - fee if fee_currency == key else qty
+            if received_qty < Decimal("0"):
+                received_qty = Decimal("0")
+            row["quantity"] += received_qty
+            row["cost_basis"] += qty * price + (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             row["last_buy_price"] = price
         elif tx.tx_type == "transfer_in":
-            row["quantity"] += qty
-            row["cost_basis"] += qty * price + fee
+            received_qty = qty - fee if fee_currency == key else qty
+            if received_qty < Decimal("0"):
+                received_qty = Decimal("0")
+            row["quantity"] += received_qty
+            row["cost_basis"] += qty * price + (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             if price > 0:
                 row["last_buy_price"] = price
         elif tx.tx_type == "sell":
@@ -606,7 +664,7 @@ def build_holdings_state(db: Session, portfolio_id: int, include_zero: bool = Fa
                 continue
             avg = row["cost_basis"] / row["quantity"] if row["quantity"] > 0 else Decimal("0")
             removed_cost = avg * qty
-            proceeds = qty * price - fee
+            proceeds = qty * price - (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             row["quantity"] -= qty
             row["cost_basis"] -= removed_cost
             row["realized_pnl"] += proceeds - removed_cost
@@ -617,7 +675,7 @@ def build_holdings_state(db: Session, portfolio_id: int, include_zero: bool = Fa
             removed_cost = avg * qty
             row["quantity"] -= qty
             row["cost_basis"] -= removed_cost
-            row["realized_pnl"] -= fee
+            row["realized_pnl"] -= fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0")
 
         if row["quantity"] < Decimal("0"):
             row["quantity"] = Decimal("0")
