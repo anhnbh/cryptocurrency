@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from zoneinfo import ZoneInfo
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/portfolio.db")
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
@@ -48,6 +49,7 @@ PRICE_SYNC_INTERVAL_SECONDS = max(60, env_int("PRICE_SYNC_INTERVAL_SECONDS", 300
 PRICE_STREAM_ENABLED = env_bool("PRICE_STREAM_ENABLED", True)
 TRACKED_SYMBOLS_REFRESH_SECONDS = max(10, env_int("TRACKED_SYMBOLS_REFRESH_SECONDS", 30))
 ASSET_CACHE_TTL_SECONDS = max(300, env_int("ASSET_CACHE_TTL_SECONDS", 21600))
+DISPLAY_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("portfolio")
@@ -213,6 +215,7 @@ async def sync_prices_now():
         "updated": updated,
         "quote_asset": PRICE_SYNC_QUOTE_ASSET,
         "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
+        "price_last_updated_at_utc7": to_display_tz_text(last_updated) if last_updated else None,
     }
 
 
@@ -235,6 +238,14 @@ def to_utc_iso(dt: datetime) -> str:
     else:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat()
+
+
+def to_display_tz_text(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.astimezone(DISPLAY_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
 
 @app.post("/api/transactions")
@@ -515,6 +526,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
             "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
             "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
             "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
+            "price_last_updated_at_utc7": to_display_tz_text(last_updated) if last_updated else None,
             "summary": {
                 "current_balance": float(current_balance),
                 "total_profit_loss": float((current_balance - total_cost) + total_realized),

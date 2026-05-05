@@ -165,7 +165,7 @@ function renderMarketUpdateInfo(data) {
     return;
   }
 
-  const dt = formatDateUTC7(data.price_last_updated_at);
+  const dt = data.price_last_updated_at_utc7 || formatDateUTC7(data.price_last_updated_at);
   if (mode === "realtime") {
     el.textContent = `Market price update: ${dt} (UTC+7, ${state.quoteAsset}, realtime stream)`;
     return;
