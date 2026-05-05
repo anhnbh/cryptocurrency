@@ -136,10 +136,6 @@ body {
   align-items: center;
 }
 
-#txFormWrap {
-  margin-top: 10px;
-}
-
 .panel h2,
 .panel h3 {
   margin: 0;
@@ -272,6 +268,7 @@ button {
 .actions-cell {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 
 .detail-panel {
@@ -280,6 +277,76 @@ button {
 
 .detail-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+body.modal-open {
+  overflow: hidden;
+}
+
+.coin-link {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--txt);
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.coin-link:hover {
+  color: #b9d4ff;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 10, 18, 0.72);
+  backdrop-filter: blur(1px);
+}
+
+.modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(680px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #18293d, #101f33);
+  padding: 16px;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-head h2 {
+  margin: 0;
+}
+
+.modal-form {
+  margin-top: 12px;
+}
+
+#fixedAssetName[readonly] {
+  background: #1a2c44;
+  color: #c7d8ee;
 }
 
 @media (max-width: 1024px) {

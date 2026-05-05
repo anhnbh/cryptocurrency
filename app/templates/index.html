@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Crypto Portfolio</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260505c" />
+    <link rel="stylesheet" href="/static/style.css?v=20260505d" />
   </head>
   <body>
     <main class="app-shell">
@@ -75,60 +75,9 @@
           <aside class="panel side">
             <div class="panel-head">
               <h2>Add Transaction</h2>
-              <button type="button" id="txToggleBtn" class="btn primary small">+ Add Transaction</button>
+              <button type="button" id="openTxModalBtn" class="btn primary small">+ Add Transaction</button>
             </div>
             <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
-
-            <div id="txFormWrap" class="hidden">
-              <form id="txForm" class="stack-form">
-                <label>
-                  Search Asset
-                  <input id="assetSearch" type="text" placeholder="Type BTC, ETH..." />
-                </label>
-
-                <label>
-                  Asset
-                  <select id="assetSelect" required></select>
-                </label>
-
-                <label>
-                  Type
-                  <select id="txType" required>
-                    <option value="buy">Buy</option>
-                    <option value="sell">Sell</option>
-                    <option value="transfer_in">Transfer In</option>
-                    <option value="transfer_out">Transfer Out</option>
-                  </select>
-                </label>
-
-                <label>
-                  Quantity
-                  <input id="quantity" type="number" step="any" min="0.0000000001" required />
-                </label>
-
-                <label>
-                  Price (USDT)
-                  <input id="priceUsdt" type="number" step="any" min="0" placeholder="Required for buy/sell (USDT)" />
-                </label>
-
-                <label>
-                  <span id="feeLabel">Fee (USDT)</span>
-                  <input id="feeUsdt" type="number" step="any" min="0" value="0" />
-                </label>
-
-                <label>
-                  Time
-                  <input id="txTime" type="datetime-local" required />
-                </label>
-
-                <label>
-                  Note
-                  <input id="note" type="text" placeholder="Optional" />
-                </label>
-
-                <button type="submit" class="btn success">Save Transaction</button>
-              </form>
-            </div>
 
             <div class="recent-wrap">
               <h3>Recent Transactions</h3>
@@ -146,6 +95,7 @@
             <p id="coinDetailPrice" class="value small"></p>
           </div>
           <div class="topbar-actions">
+            <button type="button" id="detailAddTxBtn" class="btn primary">+ Add Transaction</button>
             <button type="button" id="detailDeleteBtn" class="btn danger">Delete Coin</button>
             <button type="button" id="detailBackBtn" class="btn ghost">Back</button>
           </div>
@@ -197,6 +147,75 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260505c"></script>
+    <div id="txModal" class="modal hidden">
+      <div id="txModalBackdrop" class="modal-backdrop"></div>
+      <section class="modal-card">
+        <div class="modal-head">
+          <h2>Add Transaction</h2>
+          <button type="button" id="txModalClose" class="btn ghost small" aria-label="Close">×</button>
+        </div>
+        <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
+
+        <form id="txForm" class="stack-form modal-form">
+          <div id="assetPickerWrap" class="stack-form">
+            <label>
+              Search Asset
+              <input id="assetSearch" type="text" placeholder="Type BTC, ETH..." />
+            </label>
+
+            <label>
+              Asset
+              <select id="assetSelect" required></select>
+            </label>
+          </div>
+
+          <div id="fixedAssetWrap" class="hidden">
+            <label>
+              Asset
+              <input id="fixedAssetName" type="text" readonly />
+            </label>
+          </div>
+
+          <label>
+            Type
+            <select id="txType" required>
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+              <option value="transfer_in">Transfer In</option>
+              <option value="transfer_out">Transfer Out</option>
+            </select>
+          </label>
+
+          <label>
+            Quantity
+            <input id="quantity" type="number" step="any" min="0.0000000001" required />
+          </label>
+
+          <label>
+            Price (USDT)
+            <input id="priceUsdt" type="number" step="any" min="0" placeholder="Required for buy/sell (USDT)" />
+          </label>
+
+          <label>
+            <span id="feeLabel">Fee (USDT)</span>
+            <input id="feeUsdt" type="number" step="any" min="0" value="0" />
+          </label>
+
+          <label>
+            Time
+            <input id="txTime" type="datetime-local" required />
+          </label>
+
+          <label>
+            Note
+            <input id="note" type="text" placeholder="Optional" />
+          </label>
+
+          <button type="submit" class="btn success">Save Transaction</button>
+        </form>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=20260505d"></script>
   </body>
 </html>

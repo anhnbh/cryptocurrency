@@ -3,7 +3,7 @@ const state = {
   assets: [],
   quoteAsset: "USDT",
   detailSymbol: null,
-  txFormOpen: false,
+  txFixedSymbol: null,
   ignoreHashChange: false,
   loadingState: false,
 };
@@ -108,10 +108,78 @@ function showDetailView() {
   document.getElementById("detailView").classList.remove("hidden");
 }
 
-function setTxFormOpen(open) {
-  state.txFormOpen = open;
-  document.getElementById("txFormWrap").classList.toggle("hidden", !open);
-  document.getElementById("txToggleBtn").textContent = open ? "Hide Form" : "+ Add Transaction";
+function getAssetBySymbol(symbol) {
+  return state.assets.find((a) => a.symbol === symbol);
+}
+
+function setAssetBySymbol(symbol) {
+  const normalized = String(symbol || "").toUpperCase().trim();
+  if (!normalized) return;
+
+  const select = document.getElementById("assetSelect");
+  const existing = Array.from(select.options).find((o) => o.value === normalized);
+  if (!existing) {
+    const asset = getAssetBySymbol(normalized);
+    const opt = document.createElement("option");
+    opt.value = normalized;
+    opt.textContent = `${normalized} / ${state.quoteAsset}`;
+    opt.dataset.coinName = asset?.coin_name || normalized;
+    select.appendChild(opt);
+  }
+  select.value = normalized;
+}
+
+function resetTxFormFields() {
+  document.getElementById("txType").value = "buy";
+  document.getElementById("assetSearch").value = "";
+  document.getElementById("quantity").value = "";
+  document.getElementById("priceUsdt").value = "";
+  document.getElementById("feeUsdt").value = "0";
+  document.getElementById("note").value = "";
+  setDefaultTxTime();
+}
+
+function setTxAssetContext(symbol = null) {
+  const pickerWrap = document.getElementById("assetPickerWrap");
+  const fixedWrap = document.getElementById("fixedAssetWrap");
+  const fixedName = document.getElementById("fixedAssetName");
+
+  if (!symbol) {
+    state.txFixedSymbol = null;
+    pickerWrap.classList.remove("hidden");
+    fixedWrap.classList.add("hidden");
+    filterAssets();
+    refreshFeeLabel();
+    return;
+  }
+
+  const normalized = String(symbol).toUpperCase().trim();
+  state.txFixedSymbol = normalized;
+  setAssetBySymbol(normalized);
+  const asset = getAssetBySymbol(normalized);
+  fixedName.value = `${asset?.coin_name || normalized} (${normalized}/${state.quoteAsset})`;
+  pickerWrap.classList.add("hidden");
+  fixedWrap.classList.remove("hidden");
+  refreshFeeLabel();
+}
+
+function openTxModal(symbol = null) {
+  if (!state.activePortfolioId) {
+    alert("Please create/select a portfolio first.");
+    return;
+  }
+
+  resetTxFormFields();
+  setTxAssetContext(symbol);
+  document.getElementById("txModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  document.getElementById("quantity").focus();
+}
+
+function closeTxModal() {
+  document.getElementById("txModal").classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  state.txFixedSymbol = null;
 }
 
 async function applyRouteFromHash() {
@@ -211,7 +279,7 @@ function renderHoldings(holdings) {
     const tr = document.createElement("tr");
 
     const cells = [
-      `<strong>${h.coin_name}</strong> ${h.symbol}`,
+      `<button type="button" class="coin-link">${h.coin_name} ${h.symbol}</button>`,
       fmtNum(h.quantity),
       fmtQuote(h.current_price),
       `<span class="${pnlClass(h.price_change_24h)}">${fmtPct(h.price_change_24h)}</span>`,
@@ -227,6 +295,11 @@ function renderHoldings(holdings) {
 
     const actionsTd = document.createElement("td");
     actionsTd.className = "actions-cell";
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn primary small";
+    addBtn.textContent = "+ Tx";
+    addBtn.onclick = () => openTxModal(h.symbol);
 
     const detailBtn = document.createElement("button");
     detailBtn.className = "btn ghost small";
@@ -250,9 +323,15 @@ function renderHoldings(holdings) {
       }
     };
 
+    actionsTd.appendChild(addBtn);
     actionsTd.appendChild(detailBtn);
     actionsTd.appendChild(deleteBtn);
     tr.appendChild(actionsTd);
+
+    const coinButton = tr.querySelector(".coin-link");
+    if (coinButton) {
+      coinButton.addEventListener("click", () => loadCoinDetail(h.symbol));
+    }
 
     body.appendChild(tr);
   });
@@ -301,6 +380,10 @@ function renderAssetOptions(filtered) {
 }
 
 function filterAssets() {
+  if (state.txFixedSymbol) {
+    return;
+  }
+
   const keyword = document.getElementById("assetSearch").value.trim().toUpperCase();
   if (!keyword) {
     renderAssetOptions(state.assets);
@@ -504,6 +587,10 @@ function bindForms() {
       return;
     }
 
+    if (state.txFixedSymbol) {
+      setAssetBySymbol(state.txFixedSymbol);
+    }
+
     const select = document.getElementById("assetSelect");
     const selectedOption = select.options[select.selectedIndex];
     if (!selectedOption) {
@@ -535,7 +622,7 @@ function bindForms() {
       document.getElementById("feeUsdt").value = "0";
       document.getElementById("note").value = "";
       setDefaultTxTime();
-      setTxFormOpen(false);
+      closeTxModal();
       await loadState();
     } catch (err) {
       alert(err.message);
@@ -563,9 +650,12 @@ function bindForms() {
     }
   });
 
-  document.getElementById("txToggleBtn").addEventListener("click", () => {
-    setTxFormOpen(!state.txFormOpen);
-  });
+  document.getElementById("openTxModalBtn").addEventListener("click", () => openTxModal(null));
+
+  document.getElementById("detailAddTxBtn").addEventListener("click", () => openTxModal(state.detailSymbol));
+
+  document.getElementById("txModalClose").addEventListener("click", closeTxModal);
+  document.getElementById("txModalBackdrop").addEventListener("click", closeTxModal);
 
   document.getElementById("detailBackBtn").addEventListener("click", hideCoinDetail);
 
@@ -587,6 +677,12 @@ function bindForms() {
     await applyRouteFromHash();
   });
 
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeTxModal();
+    }
+  });
+
   setInterval(async () => {
     await loadState();
   }, AUTO_REFRESH_MS);
@@ -595,7 +691,6 @@ function bindForms() {
 async function bootstrap() {
   setDefaultTxTime();
   bindForms();
-  setTxFormOpen(false);
   showHomeView();
   await loadAssets();
   await applyRouteFromHash();
