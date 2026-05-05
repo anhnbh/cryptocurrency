@@ -94,6 +94,20 @@ body {
   margin-bottom: 16px;
 }
 
+.overview-list {
+  display: grid;
+  gap: 14px;
+}
+
+.overview-portfolio .summary-grid {
+  margin-top: 12px;
+  margin-bottom: 10px;
+}
+
+.overview-grid .value.small {
+  font-size: 17px;
+}
+
 .card {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -354,6 +368,10 @@ body.modal-open {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .content-grid {
     grid-template-columns: 1fr;
   }
@@ -375,6 +393,10 @@ body.modal-open {
   }
 
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-grid {
     grid-template-columns: 1fr;
   }
 

@@ -1,5 +1,6 @@
 const state = {
   activePortfolioId: null,
+  viewMode: "overview",
   assets: [],
   quoteAsset: "USDT",
   detailSymbol: null,
@@ -65,20 +66,27 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function formatPairSymbol(symbol) {
+  const sym = normalizeText(symbol).toUpperCase();
+  return `${sym}/${state.quoteAsset}`;
+}
+
 function formatCoinInline(coinName, symbol) {
   const sym = normalizeText(symbol).toUpperCase();
   const name = normalizeText(coinName);
-  if (!name) return sym;
-  if (name.toUpperCase() === sym) return sym;
-  return `${name} ${sym}`;
+  const pair = formatPairSymbol(sym);
+  if (!name) return pair;
+  if (name.toUpperCase() === sym) return pair;
+  return `${name} (${pair})`;
 }
 
 function formatCoinTitle(coinName, symbol) {
   const sym = normalizeText(symbol).toUpperCase();
   const name = normalizeText(coinName);
-  if (!name) return sym;
-  if (name.toUpperCase() === sym) return sym;
-  return `${name} (${sym})`;
+  const pair = formatPairSymbol(sym);
+  if (!name) return pair;
+  if (name.toUpperCase() === sym) return pair;
+  return `${name} (${pair})`;
 }
 
 function getSelectedAssetSymbol() {
@@ -202,11 +210,18 @@ function closeTxModal() {
   state.txFixedSymbol = null;
 }
 
+function renderMainSectionMode() {
+  const isOverview = state.viewMode === "overview";
+  document.getElementById("overviewSection").classList.toggle("hidden", !isOverview);
+  document.getElementById("portfolioSection").classList.toggle("hidden", isOverview);
+}
+
 async function applyRouteFromHash() {
   const hash = window.location.hash || buildHomeHash();
   const match = hash.match(/^#\/portfolio\/(\d+)\/coin\/([^/]+)$/);
 
   if (match) {
+    state.viewMode = "portfolio";
     const portfolioId = Number(match[1]);
     const symbol = decodeURIComponent(match[2]).toUpperCase();
     if (!Number.isNaN(portfolioId)) {
@@ -219,6 +234,7 @@ async function applyRouteFromHash() {
 
   state.detailSymbol = null;
   showHomeView();
+  renderMainSectionMode();
   await loadState();
 }
 
@@ -226,18 +242,141 @@ function renderTabs(portfolios, activeId) {
   const wrap = document.getElementById("portfolioTabs");
   wrap.innerHTML = "";
 
+  const overviewBtn = document.createElement("button");
+  overviewBtn.className = `tab-btn ${state.viewMode === "overview" ? "active" : ""}`;
+  overviewBtn.textContent = "Overview";
+  overviewBtn.onclick = async () => {
+    state.viewMode = "overview";
+    state.detailSymbol = null;
+    showHomeView();
+    setHash(buildHomeHash());
+    await loadState();
+  };
+  wrap.appendChild(overviewBtn);
+
   portfolios.forEach((p) => {
     const btn = document.createElement("button");
-    btn.className = `tab-btn ${p.id === activeId ? "active" : ""}`;
+    btn.className = `tab-btn ${state.viewMode === "portfolio" && p.id === activeId ? "active" : ""}`;
     btn.textContent = p.name;
-    btn.onclick = () => {
+    btn.onclick = async () => {
+      state.viewMode = "portfolio";
       state.activePortfolioId = p.id;
       state.detailSymbol = null;
       showHomeView();
       setHash(buildHomeHash());
-      loadState();
+      await loadState();
     };
     wrap.appendChild(btn);
+  });
+}
+
+function renderOverview(overview) {
+  const summary = overview?.summary || {
+    current_balance: 0,
+    portfolio_change_24h: 0,
+    total_profit_loss: 0,
+    total_profit_loss_pct: 0,
+    top_performer: null,
+  };
+
+  document.getElementById("ovCurrentBalance").textContent = fmtQuote(summary.current_balance);
+  const changeEl = document.getElementById("ovChange24h");
+  changeEl.textContent = fmtQuote(summary.portfolio_change_24h);
+  changeEl.className = `value ${pnlClass(summary.portfolio_change_24h)}`;
+
+  const pnlEl = document.getElementById("ovTotalPnl");
+  pnlEl.textContent = `${fmtQuote(summary.total_profit_loss)} (${fmtPct(summary.total_profit_loss_pct)})`;
+  pnlEl.className = `value ${pnlClass(summary.total_profit_loss)}`;
+
+  const topEl = document.getElementById("ovTopPerformer");
+  if (!summary.top_performer) {
+    topEl.textContent = "-";
+    topEl.className = "value small";
+  } else {
+    topEl.textContent = `${formatCoinTitle(summary.top_performer.coin_name, summary.top_performer.symbol)} ${fmtQuote(summary.top_performer.total_pnl)}`;
+    topEl.className = `value small ${pnlClass(summary.top_performer.total_pnl)}`;
+  }
+
+  const list = document.getElementById("overviewPortfolioList");
+  list.innerHTML = "";
+
+  (overview?.portfolios || []).forEach((item) => {
+    const panel = document.createElement("article");
+    panel.className = "panel overview-portfolio";
+
+    const head = document.createElement("div");
+    head.className = "panel-head";
+    head.innerHTML = `<h2>${item.portfolio_name}</h2>`;
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "btn ghost small";
+    openBtn.textContent = "Open Portfolio";
+    openBtn.onclick = async () => {
+      state.viewMode = "portfolio";
+      state.activePortfolioId = item.portfolio_id;
+      await loadState();
+    };
+    head.appendChild(openBtn);
+    panel.appendChild(head);
+
+    const summaryGrid = document.createElement("div");
+    summaryGrid.className = "summary-grid overview-grid";
+    summaryGrid.innerHTML = `
+      <article class="card">
+        <h3>Balance</h3>
+        <p class="value small">${fmtQuote(item.summary.current_balance)}</p>
+      </article>
+      <article class="card">
+        <h3>24h Change</h3>
+        <p class="value small ${pnlClass(item.summary.portfolio_change_24h)}">${fmtQuote(item.summary.portfolio_change_24h)}</p>
+      </article>
+      <article class="card">
+        <h3>Total PnL</h3>
+        <p class="value small ${pnlClass(item.summary.total_profit_loss)}">${fmtQuote(item.summary.total_profit_loss)} (${fmtPct(item.summary.total_profit_loss_pct)})</p>
+      </article>
+      <article class="card">
+        <h3>Top Performer</h3>
+        <p class="value small ${item.summary.top_performer ? pnlClass(item.summary.top_performer.total_pnl) : ""}">
+          ${item.summary.top_performer ? `${formatCoinTitle(item.summary.top_performer.coin_name, item.summary.top_performer.symbol)} ${fmtQuote(item.summary.top_performer.total_pnl)}` : "-"}
+        </p>
+      </article>
+    `;
+    panel.appendChild(summaryGrid);
+
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "table-wrap";
+    const rows = (item.holdings || [])
+      .slice(0, 8)
+      .map(
+        (h) => `
+          <tr>
+            <td>${formatCoinInline(h.coin_name, h.symbol)}</td>
+            <td>${fmtNum(h.quantity)}</td>
+            <td>${fmtQuote(h.current_price)}</td>
+            <td class="${pnlClass(h.price_change_24h)}">${fmtPct(h.price_change_24h)}</td>
+            <td>${fmtQuote(h.market_value)}</td>
+            <td class="${pnlClass(h.total_pnl)}">${fmtQuote(h.total_pnl)} (${fmtPct(h.pnl_pct)})</td>
+          </tr>
+        `
+      )
+      .join("");
+    tableWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Coin</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>24h</th>
+            <th>Holdings</th>
+            <th>PnL</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="6" class="muted">No holdings yet.</td></tr>'}</tbody>
+      </table>
+    `;
+    panel.appendChild(tableWrap);
+    list.appendChild(panel);
   });
 }
 
@@ -269,18 +408,12 @@ function renderMarketUpdateInfo(data) {
 
   const mode = data.price_sync_mode || "polling";
   if (!data.price_last_updated_at) {
-    el.textContent = `Market price update: waiting for first ${mode} sync (UTC+7)...`;
+    el.textContent = `Market price update: waiting for first ${mode} sync...`;
     return;
   }
 
   const dt = data.price_last_updated_at_utc7 || formatDateUTC7(data.price_last_updated_at);
-  if (mode === "realtime") {
-    el.textContent = `Market price update: ${dt} (UTC+7, ${state.quoteAsset}, realtime stream)`;
-    return;
-  }
-
-  const intervalMin = Math.max(1, Math.round((Number(data.price_sync_interval_seconds || 300) / 60)));
-  el.textContent = `Market price update: ${dt} (UTC+7, ${state.quoteAsset}, auto refresh every ${intervalMin} min)`;
+  el.textContent = `Market price update: ${dt}`;
 }
 
 function renderHoldings(holdings) {
@@ -484,7 +617,10 @@ async function loadAssets() {
 async function loadState() {
   if (state.loadingState) return;
   state.loadingState = true;
-  const query = state.activePortfolioId ? `?portfolio_id=${state.activePortfolioId}` : "";
+  const params = new URLSearchParams();
+  if (state.activePortfolioId) params.set("portfolio_id", String(state.activePortfolioId));
+  if (state.viewMode === "overview") params.set("include_overview", "1");
+  const query = params.toString() ? `?${params.toString()}` : "";
   try {
     const res = await fetch(`/api/state${query}`);
     const data = await res.json();
@@ -497,6 +633,8 @@ async function loadState() {
     renderMarketUpdateInfo(data);
     renderHoldings(data.holdings);
     renderTransactions(data.transactions);
+    renderOverview(data.overview);
+    renderMainSectionMode();
 
     if (state.detailSymbol) {
       const stillExists = data.holdings.some((h) => h.symbol === state.detailSymbol);
@@ -712,6 +850,7 @@ function bindForms() {
 async function bootstrap() {
   setDefaultTxTime();
   bindForms();
+  renderMainSectionMode();
   showHomeView();
   await loadAssets();
   await applyRouteFromHash();

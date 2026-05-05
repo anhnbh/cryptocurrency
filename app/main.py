@@ -493,27 +493,17 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/state")
-def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_db)):
-    portfolios = db.scalars(select(Portfolio).order_by(Portfolio.id.asc())).all()
-    if not portfolios:
-        p = Portfolio(name="Main Portfolio")
-        db.add(p)
-        db.commit()
-        db.refresh(p)
-        portfolios = [p]
-
-    active = None
-    if portfolio_id is not None:
-        active = next((p for p in portfolios if p.id == portfolio_id), None)
-    if not active:
-        active = portfolios[0]
-
-    all_asset_state = build_holdings_state(db, active.id, include_zero=True)
+def build_portfolio_snapshot(
+    db: Session,
+    portfolio: Portfolio,
+    prices: dict[str, dict[str, Any]],
+    include_transactions: bool = True,
+    transaction_limit: int = 200,
+) -> dict[str, Any]:
+    all_asset_state = build_holdings_state(db, portfolio.id, include_zero=True)
     holdings_state = {k: v for k, v in all_asset_state.items() if v["quantity"] > 0}
-    prices = get_price_map(db)
 
-    holdings = []
+    holdings: list[dict[str, Any]] = []
     current_balance = Decimal("0")
     total_cost = Decimal("0")
     total_realized = Decimal("0")
@@ -559,64 +549,144 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
     holdings.sort(key=lambda x: x["market_value"], reverse=True)
     top = max(holdings, key=lambda x: x["total_pnl"]) if holdings else None
 
-    transactions = db.scalars(
-        select(Transaction)
-        .where(Transaction.portfolio_id == active.id)
-        .order_by(Transaction.tx_time.desc(), Transaction.id.desc())
-        .limit(200)
-    ).all()
+    total_profit_loss = (current_balance - total_cost) + total_realized
+    total_profit_loss_pct = (
+        (total_profit_loss / total_cost * Decimal("100")) if total_cost > 0 else Decimal("0")
+    )
+
+    transactions: list[dict[str, Any]] = []
+    if include_transactions:
+        tx_rows = db.scalars(
+            select(Transaction)
+            .where(Transaction.portfolio_id == portfolio.id)
+            .order_by(Transaction.tx_time.desc(), Transaction.id.desc())
+            .limit(transaction_limit)
+        ).all()
+        transactions = [
+            {
+                "id": t.id,
+                "symbol": t.symbol,
+                "coin_name": t.coin_name,
+                "tx_type": t.tx_type,
+                "quantity": float(t.quantity),
+                "price_usdt": float(t.price_usd) if t.price_usd is not None else None,
+                "fee_usdt": float(t.fee_usd),
+                "fee_currency": t.fee_currency or PRICE_SYNC_QUOTE_ASSET,
+                "note": t.note,
+                "tx_time": to_utc_iso(t.tx_time),
+            }
+            for t in tx_rows
+        ]
+
+    return {
+        "portfolio_id": portfolio.id,
+        "portfolio_name": portfolio.name,
+        "summary": {
+            "current_balance": float(current_balance),
+            "total_profit_loss": float(total_profit_loss),
+            "total_profit_loss_pct": float(total_profit_loss_pct),
+            "portfolio_change_24h": float(weighted_24h_delta),
+            "top_performer": top,
+        },
+        "holdings": holdings,
+        "transactions": transactions,
+        "_metrics": {
+            "current_balance": current_balance,
+            "total_cost": total_cost,
+            "total_realized": total_realized,
+            "total_profit_loss": total_profit_loss,
+            "weighted_24h_delta": weighted_24h_delta,
+        },
+    }
+
+
+@app.get("/api/state")
+def portfolio_state(portfolio_id: int | None = None, include_overview: bool = False, db: Session = Depends(get_db)):
+    portfolios = db.scalars(select(Portfolio).order_by(Portfolio.id.asc())).all()
+    if not portfolios:
+        p = Portfolio(name="Main Portfolio")
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        portfolios = [p]
+
+    active = None
+    if portfolio_id is not None:
+        active = next((p for p in portfolios if p.id == portfolio_id), None)
+    if not active:
+        active = portfolios[0]
+
+    prices = get_price_map(db)
+    active_snapshot = build_portfolio_snapshot(db, active, prices, include_transactions=True, transaction_limit=200)
 
     price_rows = db.scalars(select(AssetPrice).order_by(AssetPrice.symbol.asc())).all()
     last_updated = max((p.updated_at for p in price_rows), default=None)
 
-    return JSONResponse(
-        {
-            "portfolios": [{"id": p.id, "name": p.name} for p in portfolios],
-            "active_portfolio_id": active.id,
-            "quote_asset": PRICE_SYNC_QUOTE_ASSET,
-            "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
-            "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
-            "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
-            "price_last_updated_at_utc7": to_display_tz_text(last_updated) if last_updated else None,
+    response: dict[str, Any] = {
+        "portfolios": [{"id": p.id, "name": p.name} for p in portfolios],
+        "active_portfolio_id": active.id,
+        "quote_asset": PRICE_SYNC_QUOTE_ASSET,
+        "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
+        "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
+        "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
+        "price_last_updated_at_utc7": to_display_tz_text(last_updated) if last_updated else None,
+        "summary": active_snapshot["summary"],
+        "holdings": active_snapshot["holdings"],
+        "prices": [
+            {
+                "symbol": p.symbol,
+                "coin_name": p.coin_name,
+                "price_usdt": float(p.price_usd),
+                "change_24h_pct": float(p.change_24h_pct),
+                "updated_at": to_utc_iso(p.updated_at),
+            }
+            for p in price_rows
+        ],
+        "transactions": active_snapshot["transactions"],
+    }
+
+    if include_overview:
+        snapshots: list[dict[str, Any]] = []
+        total_balance = Decimal("0")
+        total_cost = Decimal("0")
+        total_profit_loss = Decimal("0")
+        total_change_24h = Decimal("0")
+        all_holdings: list[dict[str, Any]] = []
+
+        for p in portfolios:
+            snap = active_snapshot if p.id == active.id else build_portfolio_snapshot(
+                db, p, prices, include_transactions=False, transaction_limit=0
+            )
+            snapshots.append(
+                {
+                    "portfolio_id": p.id,
+                    "portfolio_name": p.name,
+                    "summary": snap["summary"],
+                    "holdings": snap["holdings"],
+                }
+            )
+            metrics = snap["_metrics"]
+            total_balance += metrics["current_balance"]
+            total_cost += metrics["total_cost"]
+            total_profit_loss += metrics["total_profit_loss"]
+            total_change_24h += metrics["weighted_24h_delta"]
+            all_holdings.extend(snap["holdings"])
+
+        top_global = max(all_holdings, key=lambda x: x["total_pnl"]) if all_holdings else None
+        total_pnl_pct = (total_profit_loss / total_cost * Decimal("100")) if total_cost > 0 else Decimal("0")
+
+        response["overview"] = {
             "summary": {
-                "current_balance": float(current_balance),
-                "total_profit_loss": float((current_balance - total_cost) + total_realized),
-                "total_profit_loss_pct": float(
-                    (((current_balance - total_cost) + total_realized) / total_cost * Decimal("100"))
-                    if total_cost > 0
-                    else Decimal("0")
-                ),
-                "portfolio_change_24h": float(weighted_24h_delta),
-                "top_performer": top,
+                "current_balance": float(total_balance),
+                "total_profit_loss": float(total_profit_loss),
+                "total_profit_loss_pct": float(total_pnl_pct),
+                "portfolio_change_24h": float(total_change_24h),
+                "top_performer": top_global,
             },
-            "holdings": holdings,
-            "prices": [
-                {
-                    "symbol": p.symbol,
-                    "coin_name": p.coin_name,
-                    "price_usdt": float(p.price_usd),
-                    "change_24h_pct": float(p.change_24h_pct),
-                    "updated_at": to_utc_iso(p.updated_at),
-                }
-                for p in price_rows
-            ],
-            "transactions": [
-                {
-                    "id": t.id,
-                    "symbol": t.symbol,
-                    "coin_name": t.coin_name,
-                    "tx_type": t.tx_type,
-                    "quantity": float(t.quantity),
-                    "price_usdt": float(t.price_usd) if t.price_usd is not None else None,
-                    "fee_usdt": float(t.fee_usd),
-                    "fee_currency": t.fee_currency or PRICE_SYNC_QUOTE_ASSET,
-                    "note": t.note,
-                    "tx_time": to_utc_iso(t.tx_time),
-                }
-                for t in transactions
-            ],
+            "portfolios": snapshots,
         }
-    )
+
+    return JSONResponse(response)
 
 
 def build_holdings_state(db: Session, portfolio_id: int, include_zero: bool = False) -> dict[str, dict[str, Any]]:

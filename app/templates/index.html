@@ -4,15 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Crypto Portfolio</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260505e" />
+    <link rel="stylesheet" href="/static/style.css?v=20260505i" />
   </head>
   <body>
     <main class="app-shell">
       <section id="homeView" class="view">
         <header class="topbar">
           <div>
-            <h1>Local Portfolio Tracker</h1>
-            <p>Self-hosted, unlimited portfolios and transactions. Live prices from Binance.</p>
             <p id="marketUpdateInfo" class="muted">Market price update: waiting for first sync...</p>
           </div>
           <div class="topbar-actions">
@@ -30,55 +28,79 @@
           </form>
         </section>
 
-        <section class="summary-grid">
-          <article class="card">
-            <h3>Current Balance</h3>
-            <p id="currentBalance" class="value">0 USDT</p>
-          </article>
-          <article class="card">
-            <h3>24h Portfolio Change</h3>
-            <p id="change24h" class="value">0 USDT</p>
-          </article>
-          <article class="card">
-            <h3>Total Profit / Loss</h3>
-            <p id="totalPnl" class="value">0 USDT</p>
-          </article>
-          <article class="card">
-            <h3>Top Performer</h3>
-            <p id="topPerformer" class="value small">-</p>
-          </article>
+        <section id="overviewSection" class="hidden">
+          <section class="summary-grid">
+            <article class="card">
+              <h3>Total Balance (All Portfolios)</h3>
+              <p id="ovCurrentBalance" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>24h Change (All)</h3>
+              <p id="ovChange24h" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>Total Profit / Loss (All)</h3>
+              <p id="ovTotalPnl" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>Top Performer (All)</h3>
+              <p id="ovTopPerformer" class="value small">-</p>
+            </article>
+          </section>
+          <section id="overviewPortfolioList" class="overview-list"></section>
         </section>
 
-        <section class="content-grid">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>Holdings</h2>
-              <span id="holdingCount"></span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Coin</th>
-                    <th>Qty</th>
-                    <th>Price</th>
-                    <th>24h</th>
-                    <th>Holdings</th>
-                    <th>PnL</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="holdingsBody"></tbody>
-              </table>
-            </div>
+        <section id="portfolioSection">
+          <section class="summary-grid">
+            <article class="card">
+              <h3>Current Balance</h3>
+              <p id="currentBalance" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>24h Portfolio Change</h3>
+              <p id="change24h" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>Total Profit / Loss</h3>
+              <p id="totalPnl" class="value">0 USDT</p>
+            </article>
+            <article class="card">
+              <h3>Top Performer</h3>
+              <p id="topPerformer" class="value small">-</p>
+            </article>
           </section>
 
-          <aside class="panel side">
-            <div class="recent-wrap">
-              <h3>Recent Transactions</h3>
-              <ul id="recentTx" class="recent-list"></ul>
-            </div>
-          </aside>
+          <section class="content-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Holdings</h2>
+                <span id="holdingCount"></span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Coin</th>
+                      <th>Qty</th>
+                      <th>Price</th>
+                      <th>24h</th>
+                      <th>Holdings</th>
+                      <th>PnL</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="holdingsBody"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <aside class="panel side">
+              <div class="recent-wrap">
+                <h3>Recent Transactions</h3>
+                <ul id="recentTx" class="recent-list"></ul>
+              </div>
+            </aside>
+          </section>
         </section>
       </section>
 
@@ -211,6 +233,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=20260505e"></script>
+    <script src="/static/app.js?v=20260505i"></script>
   </body>
 </html>
