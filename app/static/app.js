@@ -16,7 +16,7 @@ const fmtNum = (n, maxDigits = 6) =>
     maximumFractionDigits: maxDigits,
   }).format(Number(n || 0));
 
-const fmtQuote = (n) => `${fmtNum(n, 6)} ${state.quoteAsset}`;
+const fmtQuote = (n) => `${fmtNum(n, 2)} ${state.quoteAsset}`;
 const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
 
 function formatDateUTC7(isoText) {
