@@ -13,6 +13,8 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Có nút `Update Now` để trigger sync REST thủ công (fallback).
 - Có nút `Detail` cho từng coin: xem transaction history + card tổng quan theo coin.
 - Có nút `Delete` coin khỏi portfolio (xóa toàn bộ transaction của coin đó trong portfolio hiện tại).
+- Detail coin mở thành màn hình riêng, có nút `Back` về home.
+- Form Add Transaction thu gọn, bấm nút mới xổ khung nhập.
 - Dữ liệu transaction/portfolio nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 

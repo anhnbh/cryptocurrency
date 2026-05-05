@@ -8,141 +8,148 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
-        <div>
-          <h1>Local Portfolio Tracker</h1>
-          <p>Self-hosted, unlimited portfolios and transactions. Live prices from Binance.</p>
-          <p id="marketUpdateInfo" class="muted">Market price update: waiting for first sync...</p>
-        </div>
-        <div class="topbar-actions">
-          <button id="syncNowBtn" class="btn primary">Update Now</button>
-          <button id="refreshBtn" class="btn ghost">Refresh</button>
-        </div>
-      </header>
-
-      <section class="portfolio-strip">
-        <div id="portfolioTabs" class="tabs"></div>
-        <form id="portfolioForm" class="inline-form">
-          <input type="text" id="portfolioName" placeholder="New portfolio name" maxlength="120" required />
-          <button type="submit" class="btn primary">+ Add Portfolio</button>
-        </form>
-      </section>
-
-      <section class="summary-grid">
-        <article class="card">
-          <h3>Current Balance</h3>
-          <p id="currentBalance" class="value">0 USDT</p>
-        </article>
-        <article class="card">
-          <h3>24h Portfolio Change</h3>
-          <p id="change24h" class="value">0 USDT</p>
-        </article>
-        <article class="card">
-          <h3>Total Profit / Loss</h3>
-          <p id="totalPnl" class="value">0 USDT</p>
-        </article>
-        <article class="card">
-          <h3>Top Performer</h3>
-          <p id="topPerformer" class="value small">-</p>
-        </article>
-      </section>
-
-      <section class="content-grid">
-        <section class="panel">
-          <div class="panel-head">
-            <h2>Holdings</h2>
-            <span id="holdingCount"></span>
+      <section id="homeView" class="view">
+        <header class="topbar">
+          <div>
+            <h1>Local Portfolio Tracker</h1>
+            <p>Self-hosted, unlimited portfolios and transactions. Live prices from Binance.</p>
+            <p id="marketUpdateInfo" class="muted">Market price update: waiting for first sync...</p>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Coin</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>24h</th>
-                  <th>Holdings</th>
-                  <th>PnL</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="holdingsBody"></tbody>
-            </table>
+          <div class="topbar-actions">
+            <button type="button" id="syncNowBtn" class="btn primary">Update Now</button>
+            <button type="button" id="refreshBtn" class="btn ghost">Refresh</button>
           </div>
+        </header>
+
+        <section class="portfolio-strip">
+          <div id="portfolioTabs" class="tabs"></div>
+          <form id="portfolioForm" class="inline-form">
+            <input type="text" id="portfolioName" placeholder="New portfolio name" maxlength="120" required />
+            <button type="submit" class="btn primary">+ Add Portfolio</button>
+          </form>
         </section>
 
-        <aside class="panel side">
-          <h2>Add Transaction</h2>
-          <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
+        <section class="summary-grid">
+          <article class="card">
+            <h3>Current Balance</h3>
+            <p id="currentBalance" class="value">0 USDT</p>
+          </article>
+          <article class="card">
+            <h3>24h Portfolio Change</h3>
+            <p id="change24h" class="value">0 USDT</p>
+          </article>
+          <article class="card">
+            <h3>Total Profit / Loss</h3>
+            <p id="totalPnl" class="value">0 USDT</p>
+          </article>
+          <article class="card">
+            <h3>Top Performer</h3>
+            <p id="topPerformer" class="value small">-</p>
+          </article>
+        </section>
 
-          <form id="txForm" class="stack-form">
-            <label>
-              Search Asset
-              <input id="assetSearch" type="text" placeholder="Type BTC, ETH..." />
-            </label>
+        <section class="content-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Holdings</h2>
+              <span id="holdingCount"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Coin</th>
+                    <th>Qty</th>
+                    <th>Price</th>
+                    <th>24h</th>
+                    <th>Holdings</th>
+                    <th>PnL</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="holdingsBody"></tbody>
+              </table>
+            </div>
+          </section>
 
-            <label>
-              Asset
-              <select id="assetSelect" required></select>
-            </label>
+          <aside class="panel side">
+            <div class="panel-head">
+              <h2>Add Transaction</h2>
+              <button type="button" id="txToggleBtn" class="btn primary small">+ Add Transaction</button>
+            </div>
+            <p class="muted">Asset list is loaded from Binance spot pairs (USDT quote).</p>
 
-            <label>
-              Type
-              <select id="txType" required>
-                <option value="buy">Buy</option>
-                <option value="sell">Sell</option>
-                <option value="transfer_in">Transfer In</option>
-                <option value="transfer_out">Transfer Out</option>
-              </select>
-            </label>
+            <div id="txFormWrap" class="hidden">
+              <form id="txForm" class="stack-form">
+                <label>
+                  Search Asset
+                  <input id="assetSearch" type="text" placeholder="Type BTC, ETH..." />
+                </label>
 
-            <label>
-              Quantity
-              <input id="quantity" type="number" step="any" min="0.0000000001" required />
-            </label>
+                <label>
+                  Asset
+                  <select id="assetSelect" required></select>
+                </label>
 
-            <label>
-              Price (USDT)
-              <input id="priceUsdt" type="number" step="any" min="0" placeholder="Required for buy/sell (USDT)" />
-            </label>
+                <label>
+                  Type
+                  <select id="txType" required>
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                    <option value="transfer_in">Transfer In</option>
+                    <option value="transfer_out">Transfer Out</option>
+                  </select>
+                </label>
 
-            <label>
-              Fee (USDT)
-              <input id="feeUsdt" type="number" step="any" min="0" value="0" />
-            </label>
+                <label>
+                  Quantity
+                  <input id="quantity" type="number" step="any" min="0.0000000001" required />
+                </label>
 
-            <label>
-              Time
-              <input id="txTime" type="datetime-local" required />
-            </label>
+                <label>
+                  Price (USDT)
+                  <input id="priceUsdt" type="number" step="any" min="0" placeholder="Required for buy/sell (USDT)" />
+                </label>
 
-            <label>
-              Note
-              <input id="note" type="text" placeholder="Optional" />
-            </label>
+                <label>
+                  Fee (USDT)
+                  <input id="feeUsdt" type="number" step="any" min="0" value="0" />
+                </label>
 
-            <button type="submit" class="btn success">Save Transaction</button>
-          </form>
+                <label>
+                  Time
+                  <input id="txTime" type="datetime-local" required />
+                </label>
 
-          <div class="recent-wrap">
-            <h3>Recent Transactions</h3>
-            <ul id="recentTx" class="recent-list"></ul>
-          </div>
-        </aside>
+                <label>
+                  Note
+                  <input id="note" type="text" placeholder="Optional" />
+                </label>
+
+                <button type="submit" class="btn success">Save Transaction</button>
+              </form>
+            </div>
+
+            <div class="recent-wrap">
+              <h3>Recent Transactions</h3>
+              <ul id="recentTx" class="recent-list"></ul>
+            </div>
+          </aside>
+        </section>
       </section>
 
-      <section id="coinDetailSection" class="panel detail-panel hidden">
-        <div class="detail-top">
+      <section id="detailView" class="view hidden">
+        <header class="topbar">
           <div>
             <p id="coinDetailBread" class="muted"></p>
             <h2 id="coinDetailTitle"></h2>
             <p id="coinDetailPrice" class="value small"></p>
           </div>
           <div class="topbar-actions">
-            <button id="detailDeleteBtn" class="btn danger">Delete Coin</button>
-            <button id="detailCloseBtn" class="btn ghost">Close</button>
+            <button type="button" id="detailDeleteBtn" class="btn danger">Delete Coin</button>
+            <button type="button" id="detailBackBtn" class="btn ghost">Back</button>
           </div>
-        </div>
+        </header>
 
         <section class="summary-grid detail-grid">
           <article class="card">
@@ -167,24 +174,26 @@
           </article>
         </section>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Price</th>
-                <th>Quantity</th>
-                <th>Date & Time</th>
-                <th>Fees</th>
-                <th>Cost</th>
-                <th>Proceeds</th>
-                <th>PNL</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody id="coinTxBody"></tbody>
-          </table>
-        </div>
+        <section class="panel detail-panel">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Price</th>
+                  <th>Quantity</th>
+                  <th>Date & Time</th>
+                  <th>Fees</th>
+                  <th>Cost</th>
+                  <th>Proceeds</th>
+                  <th>PNL</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="coinTxBody"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
     </main>
 

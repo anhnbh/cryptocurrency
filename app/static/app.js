@@ -3,7 +3,10 @@ const state = {
   assets: [],
   quoteAsset: "USDT",
   detailSymbol: null,
+  txFormOpen: false,
 };
+
+const UTC7_TZ = "Asia/Ho_Chi_Minh";
 
 const fmtNum = (n, maxDigits = 6) =>
   new Intl.NumberFormat("en-US", {
@@ -11,8 +14,20 @@ const fmtNum = (n, maxDigits = 6) =>
   }).format(Number(n || 0));
 
 const fmtQuote = (n) => `${fmtNum(n, 6)} ${state.quoteAsset}`;
-
 const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
+
+function formatDateUTC7(isoText) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: UTC7_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(isoText));
+}
 
 function setDefaultTxTime() {
   const el = document.getElementById("txTime");
@@ -37,6 +52,22 @@ function formatSignedQuantity(value) {
   return `${prefix}${fmtNum(num)}`;
 }
 
+function showHomeView() {
+  document.getElementById("homeView").classList.remove("hidden");
+  document.getElementById("detailView").classList.add("hidden");
+}
+
+function showDetailView() {
+  document.getElementById("homeView").classList.add("hidden");
+  document.getElementById("detailView").classList.remove("hidden");
+}
+
+function setTxFormOpen(open) {
+  state.txFormOpen = open;
+  document.getElementById("txFormWrap").classList.toggle("hidden", !open);
+  document.getElementById("txToggleBtn").textContent = open ? "Hide Form" : "+ Add Transaction";
+}
+
 function renderTabs(portfolios, activeId) {
   const wrap = document.getElementById("portfolioTabs");
   wrap.innerHTML = "";
@@ -47,6 +78,8 @@ function renderTabs(portfolios, activeId) {
     btn.textContent = p.name;
     btn.onclick = () => {
       state.activePortfolioId = p.id;
+      state.detailSymbol = null;
+      showHomeView();
       loadState();
     };
     wrap.appendChild(btn);
@@ -78,18 +111,21 @@ function renderSummary(summary) {
 function renderMarketUpdateInfo(data) {
   const el = document.getElementById("marketUpdateInfo");
   if (!el) return;
+
   const mode = data.price_sync_mode || "polling";
   if (!data.price_last_updated_at) {
-    el.textContent = `Market price update: waiting for first ${mode} sync...`;
+    el.textContent = `Market price update: waiting for first ${mode} sync (UTC+7)...`;
     return;
   }
-  const dt = new Date(data.price_last_updated_at).toLocaleString();
+
+  const dt = formatDateUTC7(data.price_last_updated_at);
   if (mode === "realtime") {
-    el.textContent = `Market price update: ${dt} (${state.quoteAsset}, realtime stream)`;
+    el.textContent = `Market price update: ${dt} (UTC+7, ${state.quoteAsset}, realtime stream)`;
     return;
   }
+
   const intervalMin = Math.max(1, Math.round((Number(data.price_sync_interval_seconds || 300) / 60)));
-  el.textContent = `Market price update: ${dt} (${state.quoteAsset}, auto refresh every ${intervalMin} min)`;
+  el.textContent = `Market price update: ${dt} (UTC+7, ${state.quoteAsset}, auto refresh every ${intervalMin} min)`;
 }
 
 function renderHoldings(holdings) {
@@ -208,12 +244,11 @@ function filterAssets() {
 
 function hideCoinDetail() {
   state.detailSymbol = null;
-  document.getElementById("coinDetailSection").classList.add("hidden");
+  showHomeView();
 }
 
 function renderCoinDetail(detail) {
-  const section = document.getElementById("coinDetailSection");
-  section.classList.remove("hidden");
+  showDetailView();
 
   document.getElementById("coinDetailBread").textContent = `Portfolio > ${detail.portfolio_name} > ${detail.coin_name} Transaction Overview`;
   document.getElementById("coinDetailTitle").textContent = `${detail.coin_name} (${detail.symbol})`;
@@ -411,6 +446,7 @@ function bindForms() {
       document.getElementById("feeUsdt").value = "0";
       document.getElementById("note").value = "";
       setDefaultTxTime();
+      setTxFormOpen(false);
       await loadState();
     } catch (err) {
       alert(err.message);
@@ -438,7 +474,11 @@ function bindForms() {
     }
   });
 
-  document.getElementById("detailCloseBtn").addEventListener("click", hideCoinDetail);
+  document.getElementById("txToggleBtn").addEventListener("click", () => {
+    setTxFormOpen(!state.txFormOpen);
+  });
+
+  document.getElementById("detailBackBtn").addEventListener("click", hideCoinDetail);
 
   document.getElementById("detailDeleteBtn").addEventListener("click", async () => {
     if (!state.detailSymbol) return;
@@ -457,6 +497,8 @@ function bindForms() {
 async function bootstrap() {
   setDefaultTxTime();
   bindForms();
+  setTxFormOpen(false);
+  showHomeView();
   await loadAssets();
   await loadState();
 }
