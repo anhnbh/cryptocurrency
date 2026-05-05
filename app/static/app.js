@@ -5,6 +5,7 @@ const state = {
   quoteAsset: "USDT",
   detailSymbol: null,
   txFixedSymbol: null,
+  performanceCache: {},
   ignoreHashChange: false,
   loadingState: false,
 };
@@ -402,10 +403,50 @@ function filterPerfByPeriod(points, periodKey) {
   return filtered;
 }
 
+async function fetchPortfolioPerformance(portfolioId, periodKey) {
+  if (!state.performanceCache[portfolioId]) {
+    state.performanceCache[portfolioId] = {};
+  }
+  if (state.performanceCache[portfolioId][periodKey]) {
+    return state.performanceCache[portfolioId][periodKey];
+  }
+
+  const res = await fetch(`/api/portfolios/${portfolioId}/performance?period=${encodeURIComponent(periodKey)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to load performance");
+  }
+  const data = await res.json();
+  const points = data.points || [];
+  state.performanceCache[portfolioId][periodKey] = points;
+  return points;
+}
+
 function renderOverviewPerformanceChart(performancePoints, periodKey = "24H") {
   const source = parsePerfPoints(performancePoints);
+  const pills = Object.keys(PERF_PERIODS)
+    .map((k) => `<button type="button" class="pill ${k === periodKey ? "active" : ""}" data-period="${k}">${k}</button>`)
+    .join("");
+  const leftLabelMap = {
+    "24H": "24h ago",
+    "7D": "7d ago",
+    "1M": "1m ago",
+    "3M": "3m ago",
+    "1Y": "1y ago",
+  };
+
   if (!source.length) {
-    return '<div class="muted">No performance data yet.</div>';
+    return `
+      <div class="ov-perf-head">
+        <div class="ov-pills">${pills}</div>
+        <span class="muted">No data</span>
+      </div>
+      <div class="ov-line-empty muted">No performance data yet.</div>
+      <div class="ov-axis">
+        <span>${leftLabelMap[periodKey] || "Start"}</span>
+        <span>Now</span>
+      </div>
+    `;
   }
 
   const picked = filterPerfByPeriod(source, periodKey);
@@ -438,18 +479,6 @@ function renderOverviewPerformanceChart(performancePoints, periodKey = "24H") {
   const lastValue = values[values.length - 1];
   const pnl = lastValue - firstValue;
   const pnlPct = firstValue > 0 ? (pnl / firstValue) * 100 : 0;
-
-  const pills = Object.keys(PERF_PERIODS)
-    .map((k) => `<button type="button" class="pill ${k === periodKey ? "active" : ""}" data-period="${k}">${k}</button>`)
-    .join("");
-
-  const leftLabelMap = {
-    "24H": "24h ago",
-    "7D": "7d ago",
-    "1M": "1m ago",
-    "3M": "3m ago",
-    "1Y": "1y ago",
-  };
 
   return `
     <div class="ov-perf-head">
@@ -556,17 +585,37 @@ function renderOverview(overview) {
 
     const perfCard = chartGrid.querySelector(".perf-card");
     if (perfCard) {
-      perfCard.querySelectorAll(".pill").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const period = btn.dataset.period || "24H";
-          const content = perfCard.querySelector(".perf-content");
-          if (!content) return;
-          content.innerHTML = renderOverviewPerformanceChart(item.performance_points, period);
-          perfCard.querySelectorAll(".pill").forEach((x) => x.classList.remove("active"));
-          const active = perfCard.querySelector(`.pill[data-period="${period}"]`);
-          if (active) active.classList.add("active");
+      const content = perfCard.querySelector(".perf-content");
+      const bindPillActions = () => {
+        perfCard.querySelectorAll(".pill").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const period = btn.dataset.period || "24H";
+            if (!content) return;
+            content.innerHTML = '<div class="muted">Loading performance...</div>';
+            try {
+              const points = await fetchPortfolioPerformance(item.portfolio_id, period);
+              content.innerHTML = renderOverviewPerformanceChart(points, period);
+            } catch (err) {
+              content.innerHTML = renderOverviewPerformanceChart(item.performance_points || [], period);
+            }
+            bindPillActions();
+          });
         });
-      });
+      };
+
+      bindPillActions();
+
+      (async () => {
+        if (!content) return;
+        content.innerHTML = '<div class="muted">Loading performance...</div>';
+        try {
+          const points = await fetchPortfolioPerformance(item.portfolio_id, "24H");
+          content.innerHTML = renderOverviewPerformanceChart(points, "24H");
+        } catch (err) {
+          content.innerHTML = renderOverviewPerformanceChart(item.performance_points || [], "24H");
+        }
+        bindPillActions();
+      })();
     }
 
     const tableWrap = document.createElement("div");

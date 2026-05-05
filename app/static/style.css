@@ -211,6 +211,15 @@ body {
   margin-top: 6px;
 }
 
+.ov-line-empty {
+  display: grid;
+  place-items: center;
+  height: 210px;
+  border: 1px solid rgba(159, 179, 202, 0.2);
+  border-radius: 10px;
+  background: rgba(66, 149, 255, 0.04);
+}
+
 .card {
   border: 1px solid var(--line);
   border-radius: 12px;

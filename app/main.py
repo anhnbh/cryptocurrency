@@ -26,6 +26,14 @@ PRICE_SYNC_QUOTE_ASSET = os.getenv("PRICE_SYNC_QUOTE_ASSET", "USDT").upper().str
 BINANCE_WS_BASE = os.getenv("BINANCE_WS_BASE", "wss://stream.binance.com:9443")
 BINANCE_WS_STREAM = os.getenv("BINANCE_WS_STREAM", "!miniTicker@arr")
 
+PERF_PERIOD_CONFIG: dict[str, dict[str, Any]] = {
+    "24H": {"interval": "15m", "lookback": timedelta(hours=24), "limit": 200},
+    "7D": {"interval": "1h", "lookback": timedelta(days=7), "limit": 200},
+    "1M": {"interval": "4h", "lookback": timedelta(days=30), "limit": 200},
+    "3M": {"interval": "12h", "lookback": timedelta(days=90), "limit": 220},
+    "1Y": {"interval": "1d", "lookback": timedelta(days=365), "limit": 400},
+}
+
 
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -493,6 +501,24 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/portfolios/{portfolio_id}/performance")
+def portfolio_performance(portfolio_id: int, period: str = "24H", db: Session = Depends(get_db)):
+    portfolio = db.get(Portfolio, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    period_key = parse_perf_period(period)
+    points = build_performance_points_from_market(db, portfolio_id, period_key)
+
+    return {
+        "portfolio_id": portfolio_id,
+        "portfolio_name": portfolio.name,
+        "period": period_key,
+        "quote_asset": PRICE_SYNC_QUOTE_ASSET,
+        "points": points,
+    }
+
+
 def build_portfolio_performance_points(
     db: Session, portfolio_id: int, prices: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -541,6 +567,99 @@ def build_portfolio_performance_points(
 
     now = datetime.now(timezone.utc)
     points.append({"ts": to_utc_iso(now), "value_usdt": float(snapshot_value())})
+    return points
+
+
+def parse_perf_period(period: str | None) -> str:
+    key = (period or "24H").upper().strip()
+    return key if key in PERF_PERIOD_CONFIG else "24H"
+
+
+def fetch_binance_klines_sync(
+    pair_symbol: str, interval: str, start_ms: int, end_ms: int, limit: int
+) -> list[list[Any]]:
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(
+                f"{BINANCE_API_BASE}/api/v3/klines",
+                params={
+                    "symbol": pair_symbol,
+                    "interval": interval,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                    "limit": limit,
+                },
+            )
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+    except Exception:
+        logger.exception("Failed to fetch klines for %s", pair_symbol)
+    return []
+
+
+def build_performance_points_from_market(
+    db: Session,
+    portfolio_id: int,
+    period: str,
+    now_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    now = now_utc or datetime.now(timezone.utc)
+    period_key = parse_perf_period(period)
+    cfg = PERF_PERIOD_CONFIG[period_key]
+
+    holdings_state = build_holdings_state(db, portfolio_id, include_zero=True)
+    qty_by_symbol: dict[str, Decimal] = {
+        symbol: item["quantity"]
+        for symbol, item in holdings_state.items()
+        if item["quantity"] > 0 and symbol != PRICE_SYNC_QUOTE_ASSET
+    }
+    if not qty_by_symbol:
+        return []
+
+    start = now - cfg["lookback"]
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(now.timestamp() * 1000)
+    interval = str(cfg["interval"])
+    limit = int(cfg["limit"])
+
+    agg_value_by_ts: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    for symbol, qty in qty_by_symbol.items():
+        pair = f"{symbol}{PRICE_SYNC_QUOTE_ASSET}"
+        rows = fetch_binance_klines_sync(pair, interval, start_ms, end_ms, limit)
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 5:
+                continue
+            try:
+                ts_ms = int(row[0])
+                close_price = Decimal(str(row[4]))
+            except (ValueError, InvalidOperation):
+                continue
+            if close_price <= 0:
+                continue
+            agg_value_by_ts[ts_ms] += qty * close_price
+
+    if not agg_value_by_ts:
+        return []
+
+    points = []
+    for ts_ms in sorted(agg_value_by_ts.keys()):
+        ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        points.append(
+            {
+                "ts": to_utc_iso(ts_dt),
+                "value_usdt": float(agg_value_by_ts[ts_ms]),
+            }
+        )
+
+    prices = get_price_map(db)
+    current_total = Decimal("0")
+    for symbol, qty in qty_by_symbol.items():
+        px = Decimal(str(prices.get(symbol, {}).get("price_usdt", 0) or 0))
+        current_total += qty * px
+    points.append({"ts": to_utc_iso(now), "value_usdt": float(current_total)})
     return points
 
 
