@@ -431,7 +431,8 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
             signed_qty = received_qty
             tx_cost = qty * price + (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
             tx_proceeds = Decimal("0")
-            tx_pnl = (current_price - price) * received_qty - (fee if fee_currency == PRICE_SYNC_QUOTE_ASSET else Decimal("0"))
+            # Mark-to-market PnL per lot: current value of net received coin minus original cost paid.
+            tx_pnl = (current_price * received_qty) - tx_cost
             run_qty += received_qty
             run_cost += tx_cost
         elif tx.tx_type == "sell":
