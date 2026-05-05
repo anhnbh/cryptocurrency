@@ -403,6 +403,114 @@ function filterPerfByPeriod(points, periodKey) {
   return filtered;
 }
 
+function formatAxisMoney(value) {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${value < 0 ? "-" : ""}${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${value < 0 ? "-" : ""}${(abs / 1_000).toFixed(0)}K`;
+  return `${value < 0 ? "-" : ""}${abs.toFixed(0)}`;
+}
+
+function formatPerfTick(ts, spanMs) {
+  const date = new Date(ts);
+  if (spanMs >= 180 * 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat("en-US", { month: "short", year: "2-digit" }).format(date);
+  }
+  if (spanMs >= 3 * 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat("en-US", { day: "2-digit", month: "short" }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: UTC7_TZ,
+  }).format(date);
+}
+
+function buildPerformanceModel(performancePoints, periodKey = "24H") {
+  const source = parsePerfPoints(performancePoints);
+  if (!source.length) {
+    return {
+      hasData: false,
+      periodKey,
+      pills: Object.keys(PERF_PERIODS),
+      leftLabel: periodKey === "24H" ? "24h ago" : periodKey === "7D" ? "7d ago" : periodKey === "1M" ? "1m ago" : periodKey === "3M" ? "3m ago" : "1y ago",
+    };
+  }
+
+  const picked = filterPerfByPeriod(source, periodKey);
+  if (picked.length < 2) {
+    const single = picked[0] || source[0];
+    picked.push({ ts: Date.now(), value: single.value });
+  }
+
+  const values = picked.map((p) => p.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min) * 0.12 || 1;
+  const lo = Math.min(0, min - pad * 0.25);
+  const hi = max + pad;
+
+  const w = 620;
+  const h = 210;
+  const chartPadX = 12;
+  const chartPadY = 12;
+  const chartW = w - chartPadX * 2;
+  const chartH = h - chartPadY * 2;
+
+  const firstTs = picked[0].ts;
+  const lastTs = picked[picked.length - 1].ts;
+  const tsSpan = Math.max(1, lastTs - firstTs);
+  const valueSpan = Math.max(1e-9, hi - lo);
+
+  const xy = picked.map((p) => {
+    const x = ((p.ts - firstTs) / tsSpan) * chartW + chartPadX;
+    const y = h - ((p.value - lo) / valueSpan) * chartH - chartPadY;
+    return { x, y, ts: p.ts, value: p.value };
+  });
+
+  const line = xy.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const area = `${line} L ${xy[xy.length - 1].x} ${h - 8} L ${xy[0].x} ${h - 8} Z`;
+  const firstValue = values[0];
+  const lastValue = values[values.length - 1];
+  const pnl = lastValue - firstValue;
+  const pnlPct = firstValue > 0 ? (pnl / firstValue) * 100 : 0;
+
+  const yMaxNice = Math.max(1, Math.ceil(hi / 1000) * 1000);
+  const yMid = yMaxNice / 2;
+  const yMin = Math.min(0, lo);
+  const yScale = (val) => h - ((val - lo) / valueSpan) * chartH - chartPadY;
+  const yTicks = [
+    { label: `$${formatAxisMoney(yMaxNice)}`, y: yScale(yMaxNice) },
+    { label: `$${formatAxisMoney(yMid)}`, y: yScale(yMid) },
+    { label: `$${formatAxisMoney(yMin)}`, y: yScale(yMin) },
+  ];
+
+  const xTicks = [];
+  const tickCount = 5;
+  for (let i = 0; i < tickCount; i += 1) {
+    const t = firstTs + (tsSpan * i) / (tickCount - 1);
+    xTicks.push(formatPerfTick(t, tsSpan));
+  }
+
+  return {
+    hasData: true,
+    periodKey,
+    pills: Object.keys(PERF_PERIODS),
+    leftLabel: periodKey === "24H" ? "24h ago" : periodKey === "7D" ? "7d ago" : periodKey === "1M" ? "1m ago" : periodKey === "3M" ? "3m ago" : "1y ago",
+    w,
+    h,
+    xy,
+    line,
+    area,
+    pnl,
+    pnlPct,
+    yTicks,
+    xTicks,
+    miniLine: line,
+    miniArea: area,
+  };
+}
+
 async function fetchPortfolioPerformance(portfolioId, periodKey) {
   if (!state.performanceCache[portfolioId]) {
     state.performanceCache[portfolioId] = {};
@@ -423,77 +531,134 @@ async function fetchPortfolioPerformance(portfolioId, periodKey) {
 }
 
 function renderOverviewPerformanceChart(performancePoints, periodKey = "24H") {
-  const source = parsePerfPoints(performancePoints);
-  const pills = Object.keys(PERF_PERIODS)
+  const model = buildPerformanceModel(performancePoints, periodKey);
+  const pills = model.pills
     .map((k) => `<button type="button" class="pill ${k === periodKey ? "active" : ""}" data-period="${k}">${k}</button>`)
     .join("");
-  const leftLabelMap = {
-    "24H": "24h ago",
-    "7D": "7d ago",
-    "1M": "1m ago",
-    "3M": "3m ago",
-    "1Y": "1y ago",
-  };
 
-  if (!source.length) {
-    return `
+  if (!model.hasData) {
+    return {
+      html: `
       <div class="ov-perf-head">
         <div class="ov-pills">${pills}</div>
         <span class="muted">No data</span>
       </div>
       <div class="ov-line-empty muted">No performance data yet.</div>
       <div class="ov-axis">
-        <span>${leftLabelMap[periodKey] || "Start"}</span>
+        <span>${model.leftLabel}</span>
         <span>Now</span>
       </div>
-    `;
+      `,
+      model,
+    };
   }
 
-  const picked = filterPerfByPeriod(source, periodKey);
-  if (picked.length < 2) {
-    const single = picked[0] || source[0];
-    picked.push({ ts: Date.now(), value: single.value });
-  }
+  const yTicksHtml = model.yTicks
+    .map((t) => `<span class="ov-y-label" style="top:${Math.max(0, Math.min(model.h - 18, t.y - 8))}px">${t.label}</span>`)
+    .join("");
+  const xTicksHtml = model.xTicks.map((t) => `<span>${t}</span>`).join("");
 
-  const values = picked.map((p) => p.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const pad = (max - min) * 0.12 || 1;
-  const lo = min - pad;
-  const hi = max + pad;
-  const w = 620;
-  const h = 210;
-
-  const firstTs = picked[0].ts;
-  const lastTs = picked[picked.length - 1].ts;
-  const tsSpan = Math.max(1, lastTs - firstTs);
-  const xy = picked.map((p) => {
-    const x = ((p.ts - firstTs) / tsSpan) * (w - 24) + 12;
-    const y = h - ((p.value - lo) / (hi - lo)) * (h - 24) - 12;
-    return { x, y };
-  });
-
-  const line = xy.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  const area = `${line} L ${xy[xy.length - 1].x} ${h - 8} L ${xy[0].x} ${h - 8} Z`;
-  const firstValue = values[0];
-  const lastValue = values[values.length - 1];
-  const pnl = lastValue - firstValue;
-  const pnlPct = firstValue > 0 ? (pnl / firstValue) * 100 : 0;
-
-  return `
+  return {
+    html: `
     <div class="ov-perf-head">
       <div class="ov-pills">${pills}</div>
-      <span class="muted ${pnlClass(pnl)}">${fmtQuote(pnl)} (${fmtPct(pnlPct)})</span>
+      <span class="muted ${pnlClass(model.pnl)}">${fmtQuote(model.pnl)} (${fmtPct(model.pnlPct)})</span>
     </div>
-    <svg viewBox="0 0 ${w} ${h}" class="ov-line-chart" aria-label="Portfolio performance">
-      <path d="${area}" class="ov-area"></path>
-      <path d="${line}" class="ov-line"></path>
-    </svg>
+    <div class="ov-chart-wrap">
+      <svg viewBox="0 0 ${model.w} ${model.h}" class="ov-line-chart" aria-label="Portfolio performance">
+        <path d="${model.area}" class="ov-area"></path>
+        <path d="${model.line}" class="ov-line"></path>
+        <line class="ov-hover-line hidden" x1="0" y1="12" x2="0" y2="${model.h - 12}"></line>
+        <circle class="ov-hover-dot hidden" cx="0" cy="0" r="5"></circle>
+      </svg>
+      <div class="ov-y-axis">${yTicksHtml}</div>
+      <div class="ov-tooltip hidden">
+        <div class="ov-tip-time"></div>
+        <div class="ov-tip-value"></div>
+      </div>
+    </div>
+    <div class="ov-x-ticks">${xTicksHtml}</div>
+    <div class="ov-mini-wrap">
+      <svg viewBox="0 0 ${model.w} 84" class="ov-mini-chart" aria-hidden="true">
+        <path d="${model.miniArea}" class="ov-mini-area"></path>
+        <path d="${model.miniLine}" class="ov-mini-line"></path>
+      </svg>
+    </div>
     <div class="ov-axis">
-      <span>${leftLabelMap[periodKey] || "Start"}</span>
+      <span>${model.leftLabel}</span>
       <span>Now</span>
     </div>
-  `;
+    `,
+    model,
+  };
+}
+
+function attachPerformanceHover(perfContentEl, model) {
+  if (!perfContentEl || !model?.hasData) return;
+  const chartWrap = perfContentEl.querySelector(".ov-chart-wrap");
+  const svg = perfContentEl.querySelector(".ov-line-chart");
+  const hoverLine = perfContentEl.querySelector(".ov-hover-line");
+  const hoverDot = perfContentEl.querySelector(".ov-hover-dot");
+  const tooltip = perfContentEl.querySelector(".ov-tooltip");
+  const tipTime = perfContentEl.querySelector(".ov-tip-time");
+  const tipValue = perfContentEl.querySelector(".ov-tip-value");
+  if (!chartWrap || !svg || !hoverLine || !hoverDot || !tooltip || !tipTime || !tipValue) return;
+
+  const points = model.xy || [];
+  const timeFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: UTC7_TZ,
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const showAt = (clientX) => {
+    const rect = svg.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const xView = (x / rect.width) * model.w;
+    let nearest = points[0];
+    let bestDist = Math.abs(points[0].x - xView);
+    for (let i = 1; i < points.length; i += 1) {
+      const d = Math.abs(points[i].x - xView);
+      if (d < bestDist) {
+        bestDist = d;
+        nearest = points[i];
+      }
+    }
+
+    hoverLine.classList.remove("hidden");
+    hoverDot.classList.remove("hidden");
+    hoverLine.setAttribute("x1", String(nearest.x));
+    hoverLine.setAttribute("x2", String(nearest.x));
+    hoverDot.setAttribute("cx", String(nearest.x));
+    hoverDot.setAttribute("cy", String(nearest.y));
+
+    tipTime.textContent = `${timeFmt.format(new Date(nearest.ts))} GMT+7`;
+    tipValue.textContent = `Total Balance: ${fmtQuote(nearest.value)}`;
+
+    tooltip.classList.remove("hidden");
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const ttRect = tooltip.getBoundingClientRect();
+    let left = ((nearest.x / model.w) * wrapRect.width) + 14;
+    if (left + ttRect.width > wrapRect.width - 8) left = wrapRect.width - ttRect.width - 8;
+    if (left < 8) left = 8;
+    let top = ((nearest.y / model.h) * wrapRect.height) - ttRect.height - 12;
+    if (top < 8) top = 8;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+
+  svg.addEventListener("mousemove", (e) => showAt(e.clientX));
+  svg.addEventListener("mouseenter", (e) => showAt(e.clientX));
+  svg.addEventListener("mouseleave", () => {
+    hoverLine.classList.add("hidden");
+    hoverDot.classList.add("hidden");
+    tooltip.classList.add("hidden");
+  });
 }
 
 function renderOverview(overview) {
@@ -571,6 +736,7 @@ function renderOverview(overview) {
 
     const chartGrid = document.createElement("div");
     chartGrid.className = "overview-charts";
+    const perfInitial = renderOverviewPerformanceChart(item.performance_points, "24H");
     chartGrid.innerHTML = `
       <article class="card chart-card">
         <h3>Total Holdings</h3>
@@ -578,7 +744,7 @@ function renderOverview(overview) {
       </article>
       <article class="card chart-card perf-card">
         <h3>Total Performance</h3>
-        <div class="perf-content">${renderOverviewPerformanceChart(item.performance_points, "24H")}</div>
+        <div class="perf-content">${perfInitial.html}</div>
       </article>
     `;
     panel.appendChild(chartGrid);
@@ -586,6 +752,7 @@ function renderOverview(overview) {
     const perfCard = chartGrid.querySelector(".perf-card");
     if (perfCard) {
       const content = perfCard.querySelector(".perf-content");
+      attachPerformanceHover(content, perfInitial.model);
       const bindPillActions = () => {
         perfCard.querySelectorAll(".pill").forEach((btn) => {
           btn.addEventListener("click", async () => {
@@ -594,9 +761,13 @@ function renderOverview(overview) {
             content.innerHTML = '<div class="muted">Loading performance...</div>';
             try {
               const points = await fetchPortfolioPerformance(item.portfolio_id, period);
-              content.innerHTML = renderOverviewPerformanceChart(points, period);
+              const perf = renderOverviewPerformanceChart(points, period);
+              content.innerHTML = perf.html;
+              attachPerformanceHover(content, perf.model);
             } catch (err) {
-              content.innerHTML = renderOverviewPerformanceChart(item.performance_points || [], period);
+              const perf = renderOverviewPerformanceChart(item.performance_points || [], period);
+              content.innerHTML = perf.html;
+              attachPerformanceHover(content, perf.model);
             }
             bindPillActions();
           });
@@ -610,9 +781,13 @@ function renderOverview(overview) {
         content.innerHTML = '<div class="muted">Loading performance...</div>';
         try {
           const points = await fetchPortfolioPerformance(item.portfolio_id, "24H");
-          content.innerHTML = renderOverviewPerformanceChart(points, "24H");
+          const perf = renderOverviewPerformanceChart(points, "24H");
+          content.innerHTML = perf.html;
+          attachPerformanceHover(content, perf.model);
         } catch (err) {
-          content.innerHTML = renderOverviewPerformanceChart(item.performance_points || [], "24H");
+          const perf = renderOverviewPerformanceChart(item.performance_points || [], "24H");
+          content.innerHTML = perf.html;
+          attachPerformanceHover(content, perf.model);
         }
         bindPillActions();
       })();

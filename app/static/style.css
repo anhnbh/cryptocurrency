@@ -203,6 +203,99 @@ body {
   stroke-width: 2.2;
 }
 
+.ov-hover-line {
+  stroke: rgba(159, 179, 202, 0.45);
+  stroke-width: 1;
+}
+
+.ov-hover-dot {
+  fill: #f44a4a;
+  stroke: rgba(244, 74, 74, 0.35);
+  stroke-width: 7;
+}
+
+.ov-chart-wrap {
+  position: relative;
+  padding-right: 62px;
+}
+
+.ov-y-axis {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 58px;
+  height: 210px;
+  pointer-events: none;
+}
+
+.ov-y-label {
+  position: absolute;
+  right: 0;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.ov-tooltip {
+  position: absolute;
+  min-width: 260px;
+  max-width: 360px;
+  background: #1c2a3b;
+  border: 1px solid rgba(159, 179, 202, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.ov-tip-time {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--txt);
+}
+
+.ov-tip-value {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--txt);
+}
+
+.ov-x-ticks {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.ov-x-ticks span {
+  text-align: center;
+}
+
+.ov-mini-wrap {
+  margin-top: 8px;
+  border: 1px solid rgba(159, 179, 202, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(66, 149, 255, 0.1);
+}
+
+.ov-mini-chart {
+  width: 100%;
+  height: 84px;
+}
+
+.ov-mini-area {
+  fill: rgba(103, 152, 255, 0.14);
+}
+
+.ov-mini-line {
+  fill: none;
+  stroke: #4c80d8;
+  stroke-width: 1.8;
+}
+
 .ov-axis {
   display: flex;
   justify-content: space-between;
@@ -519,6 +612,27 @@ body.modal-open {
   .ov-donut-wrap {
     grid-template-columns: 1fr;
     justify-items: center;
+  }
+
+  .ov-tooltip {
+    min-width: 220px;
+    padding: 12px;
+  }
+
+  .ov-tip-time {
+    font-size: 14px;
+  }
+
+  .ov-tip-value {
+    font-size: 24px;
+  }
+
+  .ov-y-label {
+    font-size: 13px;
+  }
+
+  .ov-x-ticks {
+    font-size: 13px;
   }
 
   .inline-form {
