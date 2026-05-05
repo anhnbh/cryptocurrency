@@ -688,6 +688,10 @@ function renderMarketUpdateInfo(data) {
   }
 
   const dt = data.price_last_updated_at_utc7 || formatDateUTC7(data.price_last_updated_at);
+  if (mode.startsWith("realtime")) {
+    el.textContent = `Market price update: ${dt} (realtime + fallback polling)`;
+    return;
+  }
   el.textContent = `Market price update: ${dt}`;
 }
 

@@ -166,7 +166,9 @@ async def startup() -> None:
 
     if PRICE_STREAM_ENABLED:
         price_stream_task = asyncio.create_task(price_stream_loop(), name="binance-price-stream")
-    elif PRICE_SYNC_ENABLED:
+    if PRICE_SYNC_ENABLED:
+        # Keep a polling fallback even when realtime stream is on.
+        # Many VPS networks intermittently block websocket traffic.
         price_sync_task = asyncio.create_task(price_sync_loop(), name="binance-price-sync")
 
 
@@ -800,7 +802,9 @@ def portfolio_state(portfolio_id: int | None = None, include_overview: bool = Fa
         "active_portfolio_id": active.id,
         "quote_asset": PRICE_SYNC_QUOTE_ASSET,
         "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
-        "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
+        "price_sync_mode": "realtime+polling" if (PRICE_STREAM_ENABLED and PRICE_SYNC_ENABLED) else (
+            "realtime" if PRICE_STREAM_ENABLED else "polling"
+        ),
         "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
         "price_last_updated_at_utc7": to_display_tz_text(last_updated) if last_updated else None,
         "summary": active_snapshot["summary"],
