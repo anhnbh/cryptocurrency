@@ -212,7 +212,7 @@ async def sync_prices_now():
     return {
         "updated": updated,
         "quote_asset": PRICE_SYNC_QUOTE_ASSET,
-        "price_last_updated_at": last_updated.isoformat() if last_updated else None,
+        "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
     }
 
 
@@ -226,6 +226,15 @@ def parse_decimal(text: str | None, field_name: str, allow_none: bool = False) -
     except (InvalidOperation, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be a number") from exc
     return value
+
+
+def to_utc_iso(dt: datetime) -> str:
+    # SQLite may return naive datetimes; treat them as UTC for consistent frontend conversion.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat()
 
 
 @app.post("/api/transactions")
@@ -358,6 +367,9 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
 
         if tx.tx_type in {"buy", "transfer_in"}:
             tx_cost = qty * price + fee
+            tx_proceeds = Decimal("0")
+            # Show unrealized component for buy lots using current mark price.
+            tx_pnl = (current_price - price) * qty - fee
             run_qty += qty
             run_cost += tx_cost
             if tx.tx_type == "transfer_in":
@@ -374,6 +386,8 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
             signed_qty = -qty
             avg_cost = (run_cost / run_qty) if run_qty > 0 else Decimal("0")
             removed_cost = avg_cost * qty
+            tx_proceeds = Decimal("0")
+            tx_pnl = -fee
             run_qty -= qty
             run_cost -= removed_cost
 
@@ -394,7 +408,7 @@ def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
                 "proceeds_usdt": float(tx_proceeds) if tx_proceeds is not None else None,
                 "pnl_usdt": float(tx_pnl) if tx_pnl is not None else None,
                 "note": tx.note,
-                "tx_time": tx.tx_time.isoformat(),
+                "tx_time": to_utc_iso(tx.tx_time),
             }
         )
 
@@ -500,7 +514,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
             "quote_asset": PRICE_SYNC_QUOTE_ASSET,
             "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
             "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
-            "price_last_updated_at": last_updated.isoformat() if last_updated else None,
+            "price_last_updated_at": to_utc_iso(last_updated) if last_updated else None,
             "summary": {
                 "current_balance": float(current_balance),
                 "total_profit_loss": float((current_balance - total_cost) + total_realized),
@@ -519,7 +533,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
                     "coin_name": p.coin_name,
                     "price_usdt": float(p.price_usd),
                     "change_24h_pct": float(p.change_24h_pct),
-                    "updated_at": p.updated_at.isoformat(),
+                    "updated_at": to_utc_iso(p.updated_at),
                 }
                 for p in price_rows
             ],
@@ -533,7 +547,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
                     "price_usdt": float(t.price_usd) if t.price_usd is not None else None,
                     "fee_usdt": float(t.fee_usd),
                     "note": t.note,
-                    "tx_time": t.tx_time.isoformat(),
+                    "tx_time": to_utc_iso(t.tx_time),
                 }
                 for t in transactions
             ],

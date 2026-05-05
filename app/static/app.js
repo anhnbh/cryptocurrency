@@ -4,9 +4,12 @@ const state = {
   quoteAsset: "USDT",
   detailSymbol: null,
   txFormOpen: false,
+  ignoreHashChange: false,
+  loadingState: false,
 };
 
 const UTC7_TZ = "Asia/Ho_Chi_Minh";
+const AUTO_REFRESH_MS = 5000;
 
 const fmtNum = (n, maxDigits = 6) =>
   new Intl.NumberFormat("en-US", {
@@ -17,6 +20,12 @@ const fmtQuote = (n) => `${fmtNum(n, 6)} ${state.quoteAsset}`;
 const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
 
 function formatDateUTC7(isoText) {
+  if (!isoText) return "-";
+  let normalized = String(isoText).trim();
+  // Backward compatibility for older rows/timestamps that were stored without timezone.
+  if (!/[zZ]|[+-]\d{2}:\d{2}$/.test(normalized)) {
+    normalized = `${normalized}Z`;
+  }
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: UTC7_TZ,
     year: "numeric",
@@ -26,7 +35,7 @@ function formatDateUTC7(isoText) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  }).format(new Date(isoText));
+  }).format(new Date(normalized));
 }
 
 function setDefaultTxTime() {
@@ -52,6 +61,23 @@ function formatSignedQuantity(value) {
   return `${prefix}${fmtNum(num)}`;
 }
 
+function buildHomeHash() {
+  return "#/home";
+}
+
+function buildDetailHash(portfolioId, symbol) {
+  return `#/portfolio/${portfolioId}/coin/${encodeURIComponent(symbol)}`;
+}
+
+function setHash(hashValue) {
+  if (window.location.hash === hashValue) return;
+  state.ignoreHashChange = true;
+  window.location.hash = hashValue;
+  setTimeout(() => {
+    state.ignoreHashChange = false;
+  }, 0);
+}
+
 function showHomeView() {
   document.getElementById("homeView").classList.remove("hidden");
   document.getElementById("detailView").classList.add("hidden");
@@ -68,6 +94,26 @@ function setTxFormOpen(open) {
   document.getElementById("txToggleBtn").textContent = open ? "Hide Form" : "+ Add Transaction";
 }
 
+async function applyRouteFromHash() {
+  const hash = window.location.hash || buildHomeHash();
+  const match = hash.match(/^#\/portfolio\/(\d+)\/coin\/([^/]+)$/);
+
+  if (match) {
+    const portfolioId = Number(match[1]);
+    const symbol = decodeURIComponent(match[2]).toUpperCase();
+    if (!Number.isNaN(portfolioId)) {
+      state.activePortfolioId = portfolioId;
+    }
+    await loadState();
+    await loadCoinDetail(symbol, true, false);
+    return;
+  }
+
+  state.detailSymbol = null;
+  showHomeView();
+  await loadState();
+}
+
 function renderTabs(portfolios, activeId) {
   const wrap = document.getElementById("portfolioTabs");
   wrap.innerHTML = "";
@@ -80,6 +126,7 @@ function renderTabs(portfolios, activeId) {
       state.activePortfolioId = p.id;
       state.detailSymbol = null;
       showHomeView();
+      setHash(buildHomeHash());
       loadState();
     };
     wrap.appendChild(btn);
@@ -202,12 +249,12 @@ function renderTransactions(rows) {
 
   rows.slice(0, 20).forEach((tx) => {
     const li = document.createElement("li");
-    const dt = new Date(tx.tx_time).toLocaleString();
+    const dt = formatDateUTC7(tx.tx_time);
     const price = tx.price_usdt == null ? "-" : fmtQuote(tx.price_usdt);
     li.innerHTML = `
       <strong>${tx.coin_name} (${tx.symbol})</strong><br>
       ${formatType(tx.tx_type)} | qty ${fmtNum(tx.quantity)} | price ${price} | fee ${fmtQuote(tx.fee_usdt)}<br>
-      <small>${dt}${tx.note ? ` | ${tx.note}` : ""}</small>
+      <small>${dt} (UTC+7)${tx.note ? ` | ${tx.note}` : ""}</small>
     `;
     ul.appendChild(li);
   });
@@ -242,9 +289,12 @@ function filterAssets() {
   renderAssetOptions(filtered);
 }
 
-function hideCoinDetail() {
+function hideCoinDetail(syncHash = true) {
   state.detailSymbol = null;
   showHomeView();
+  if (syncHash) {
+    setHash(buildHomeHash());
+  }
 }
 
 function renderCoinDetail(detail) {
@@ -275,7 +325,7 @@ function renderCoinDetail(detail) {
     const cost = tx.cost_usdt == null ? "-" : fmtQuote(tx.cost_usdt);
     const proceeds = tx.proceeds_usdt == null ? "-" : fmtQuote(tx.proceeds_usdt);
     const pnl = tx.pnl_usdt == null ? "-" : fmtQuote(tx.pnl_usdt);
-    const dt = new Date(tx.tx_time).toLocaleString();
+    const dt = formatDateUTC7(tx.tx_time);
 
     tr.innerHTML = `
       <td class="${tx.tx_type === "buy" ? "green" : tx.tx_type === "sell" ? "red" : ""}">${formatType(tx.tx_type)}</td>
@@ -301,26 +351,32 @@ async function loadAssets() {
 }
 
 async function loadState() {
+  if (state.loadingState) return;
+  state.loadingState = true;
   const query = state.activePortfolioId ? `?portfolio_id=${state.activePortfolioId}` : "";
-  const res = await fetch(`/api/state${query}`);
-  const data = await res.json();
+  try {
+    const res = await fetch(`/api/state${query}`);
+    const data = await res.json();
 
-  state.activePortfolioId = data.active_portfolio_id;
-  state.quoteAsset = data.quote_asset || state.quoteAsset;
+    state.activePortfolioId = data.active_portfolio_id;
+    state.quoteAsset = data.quote_asset || state.quoteAsset;
 
-  renderTabs(data.portfolios, data.active_portfolio_id);
-  renderSummary(data.summary);
-  renderMarketUpdateInfo(data);
-  renderHoldings(data.holdings);
-  renderTransactions(data.transactions);
+    renderTabs(data.portfolios, data.active_portfolio_id);
+    renderSummary(data.summary);
+    renderMarketUpdateInfo(data);
+    renderHoldings(data.holdings);
+    renderTransactions(data.transactions);
 
-  if (state.detailSymbol) {
-    const stillExists = data.holdings.some((h) => h.symbol === state.detailSymbol);
-    if (!stillExists) {
-      hideCoinDetail();
-    } else {
-      await loadCoinDetail(state.detailSymbol, false);
+    if (state.detailSymbol) {
+      const stillExists = data.holdings.some((h) => h.symbol === state.detailSymbol);
+      if (!stillExists) {
+        hideCoinDetail();
+      } else {
+        await loadCoinDetail(state.detailSymbol, false, false);
+      }
     }
+  } finally {
+    state.loadingState = false;
   }
 }
 
@@ -369,13 +425,16 @@ async function fetchCoinDetail(symbol) {
   return res.json();
 }
 
-async function loadCoinDetail(symbol, setSymbol = true) {
+async function loadCoinDetail(symbol, setSymbol = true, syncHash = true) {
   if (setSymbol) {
     state.detailSymbol = symbol;
   }
   try {
     const detail = await fetchCoinDetail(symbol);
     renderCoinDetail(detail);
+    if (syncHash && state.activePortfolioId != null) {
+      setHash(buildDetailHash(state.activePortfolioId, symbol));
+    }
   } catch (err) {
     alert(err.message);
     hideCoinDetail();
@@ -492,6 +551,15 @@ function bindForms() {
       alert(err.message);
     }
   });
+
+  window.addEventListener("hashchange", async () => {
+    if (state.ignoreHashChange) return;
+    await applyRouteFromHash();
+  });
+
+  setInterval(async () => {
+    await loadState();
+  }, AUTO_REFRESH_MS);
 }
 
 async function bootstrap() {
@@ -500,7 +568,7 @@ async function bootstrap() {
   setTxFormOpen(false);
   showHomeView();
   await loadAssets();
-  await loadState();
+  await applyRouteFromHash();
 }
 
 bootstrap();
