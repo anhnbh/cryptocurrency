@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections import defaultdict
@@ -9,17 +10,20 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
+import websockets
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, select
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/portfolio.db")
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
 PRICE_SYNC_QUOTE_ASSET = os.getenv("PRICE_SYNC_QUOTE_ASSET", "USDT").upper().strip()
+BINANCE_WS_BASE = os.getenv("BINANCE_WS_BASE", "wss://stream.binance.com:9443")
+BINANCE_WS_STREAM = os.getenv("BINANCE_WS_STREAM", "!miniTicker@arr")
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -41,6 +45,8 @@ def env_int(name: str, default: int) -> int:
 
 PRICE_SYNC_ENABLED = env_bool("PRICE_SYNC_ENABLED", True)
 PRICE_SYNC_INTERVAL_SECONDS = max(60, env_int("PRICE_SYNC_INTERVAL_SECONDS", 300))
+PRICE_STREAM_ENABLED = env_bool("PRICE_STREAM_ENABLED", True)
+TRACKED_SYMBOLS_REFRESH_SECONDS = max(10, env_int("TRACKED_SYMBOLS_REFRESH_SECONDS", 30))
 ASSET_CACHE_TTL_SECONDS = max(300, env_int("ASSET_CACHE_TTL_SECONDS", 21600))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -99,6 +105,7 @@ app = FastAPI(title="Local Crypto Portfolio")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 price_sync_task: asyncio.Task[Any] | None = None
+price_stream_task: asyncio.Task[Any] | None = None
 assets_cache: list[dict[str, str]] = []
 assets_cache_expiry: datetime | None = None
 assets_cache_lock = asyncio.Lock()
@@ -133,7 +140,7 @@ class TransactionCreate(BaseModel):
 
 @app.on_event("startup")
 async def startup() -> None:
-    global price_sync_task
+    global price_sync_task, price_stream_task
 
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
@@ -144,13 +151,15 @@ async def startup() -> None:
 
     await get_binance_assets(force_refresh=True)
 
-    if PRICE_SYNC_ENABLED:
+    if PRICE_STREAM_ENABLED:
+        price_stream_task = asyncio.create_task(price_stream_loop(), name="binance-price-stream")
+    elif PRICE_SYNC_ENABLED:
         price_sync_task = asyncio.create_task(price_sync_loop(), name="binance-price-sync")
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    global price_sync_task
+    global price_sync_task, price_stream_task
 
     if price_sync_task is not None:
         price_sync_task.cancel()
@@ -159,6 +168,14 @@ async def shutdown() -> None:
         except asyncio.CancelledError:
             pass
         price_sync_task = None
+
+    if price_stream_task is not None:
+        price_stream_task.cancel()
+        try:
+            await price_stream_task
+        except asyncio.CancelledError:
+            pass
+        price_stream_task = None
 
 
 @app.get("/")
@@ -264,6 +281,142 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     return {"id": tx.id}
 
 
+@app.delete("/api/coins/{symbol}")
+def delete_coin(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
+    portfolio = db.get(Portfolio, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    coin_symbol = symbol.upper().strip()
+    existing = db.scalar(
+        select(Transaction.id).where(Transaction.portfolio_id == portfolio_id, Transaction.symbol == coin_symbol).limit(1)
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Coin not found in this portfolio")
+
+    result = db.execute(
+        delete(Transaction).where(Transaction.portfolio_id == portfolio_id, Transaction.symbol == coin_symbol)
+    )
+
+    still_used = db.scalar(select(Transaction.id).where(Transaction.symbol == coin_symbol).limit(1))
+    if still_used is None and coin_symbol != PRICE_SYNC_QUOTE_ASSET:
+        row = db.get(AssetPrice, coin_symbol)
+        if row is not None:
+            db.delete(row)
+
+    db.commit()
+    return {"symbol": coin_symbol, "deleted_transactions": int(result.rowcount or 0)}
+
+
+@app.get("/api/coins/{symbol}/detail")
+def coin_detail(symbol: str, portfolio_id: int, db: Session = Depends(get_db)):
+    portfolio = db.get(Portfolio, portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    coin_symbol = symbol.upper().strip()
+    txs = db.scalars(
+        select(Transaction)
+        .where(Transaction.portfolio_id == portfolio_id, Transaction.symbol == coin_symbol)
+        .order_by(Transaction.tx_time.asc(), Transaction.id.asc())
+    ).all()
+    if not txs:
+        raise HTTPException(status_code=404, detail="No transactions for this coin")
+
+    prices = get_price_map(db)
+    coin_state = build_holdings_state(db, portfolio_id, include_zero=True).get(
+        coin_symbol,
+        {
+            "coin_name": txs[-1].coin_name,
+            "quantity": Decimal("0"),
+            "cost_basis": Decimal("0"),
+            "realized_pnl": Decimal("0"),
+            "last_buy_price": Decimal("0"),
+        },
+    )
+
+    current_price = Decimal(str(prices.get(coin_symbol, {}).get("price_usdt", coin_state["last_buy_price"] or 0)))
+    price_change_24h = Decimal(str(prices.get(coin_symbol, {}).get("change_24h_pct", 0) or 0))
+
+    holdings_qty = coin_state["quantity"]
+    holdings_value = holdings_qty * current_price
+    total_cost = coin_state["cost_basis"]
+    total_pnl = (holdings_value - total_cost) + coin_state["realized_pnl"]
+    avg_net_cost = (total_cost / holdings_qty) if holdings_qty > 0 else Decimal("0")
+
+    run_qty = Decimal("0")
+    run_cost = Decimal("0")
+    tx_rows: list[dict[str, Any]] = []
+    for tx in txs:
+        qty = Decimal(tx.quantity)
+        fee = Decimal(tx.fee_usd)
+        price = Decimal(tx.price_usd) if tx.price_usd is not None else Decimal("0")
+        tx_cost: Decimal | None = None
+        tx_proceeds: Decimal | None = None
+        tx_pnl: Decimal | None = None
+        signed_qty = qty
+
+        if tx.tx_type in {"buy", "transfer_in"}:
+            tx_cost = qty * price + fee
+            run_qty += qty
+            run_cost += tx_cost
+            if tx.tx_type == "transfer_in":
+                signed_qty = qty
+        elif tx.tx_type == "sell":
+            signed_qty = -qty
+            avg_cost = (run_cost / run_qty) if run_qty > 0 else Decimal("0")
+            removed_cost = avg_cost * qty
+            tx_proceeds = qty * price - fee
+            tx_pnl = tx_proceeds - removed_cost
+            run_qty -= qty
+            run_cost -= removed_cost
+        elif tx.tx_type == "transfer_out":
+            signed_qty = -qty
+            avg_cost = (run_cost / run_qty) if run_qty > 0 else Decimal("0")
+            removed_cost = avg_cost * qty
+            run_qty -= qty
+            run_cost -= removed_cost
+
+        if run_qty < 0:
+            run_qty = Decimal("0")
+        if run_cost < 0:
+            run_cost = Decimal("0")
+
+        tx_rows.append(
+            {
+                "id": tx.id,
+                "tx_type": tx.tx_type,
+                "price_usdt": float(price) if tx.price_usd is not None else None,
+                "quantity_signed": float(signed_qty),
+                "quantity": float(qty),
+                "fee_usdt": float(fee),
+                "cost_usdt": float(tx_cost) if tx_cost is not None else None,
+                "proceeds_usdt": float(tx_proceeds) if tx_proceeds is not None else None,
+                "pnl_usdt": float(tx_pnl) if tx_pnl is not None else None,
+                "note": tx.note,
+                "tx_time": tx.tx_time.isoformat(),
+            }
+        )
+
+    tx_rows.reverse()
+
+    return {
+        "portfolio_id": portfolio_id,
+        "portfolio_name": portfolio.name,
+        "symbol": coin_symbol,
+        "coin_name": coin_state["coin_name"] or txs[-1].coin_name,
+        "quote_asset": PRICE_SYNC_QUOTE_ASSET,
+        "price_usdt": float(current_price),
+        "price_change_24h": float(price_change_24h),
+        "holdings_value": float(holdings_value),
+        "holdings_quantity": float(holdings_qty),
+        "total_cost": float(total_cost),
+        "average_net_cost": float(avg_net_cost),
+        "total_profit_loss": float(total_pnl),
+        "transactions": tx_rows,
+    }
+
+
 @app.get("/api/state")
 def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_db)):
     portfolios = db.scalars(select(Portfolio).order_by(Portfolio.id.asc())).all()
@@ -346,6 +499,7 @@ def portfolio_state(portfolio_id: int | None = None, db: Session = Depends(get_d
             "active_portfolio_id": active.id,
             "quote_asset": PRICE_SYNC_QUOTE_ASSET,
             "price_sync_interval_seconds": PRICE_SYNC_INTERVAL_SECONDS,
+            "price_sync_mode": "realtime" if PRICE_STREAM_ENABLED else "polling",
             "price_last_updated_at": last_updated.isoformat() if last_updated else None,
             "summary": {
                 "current_balance": float(current_balance),
@@ -546,6 +700,18 @@ def get_symbol_name_map_for_sync(db: Session) -> dict[str, str]:
     return symbol_name
 
 
+def get_pair_name_map_for_sync(db: Session) -> dict[str, tuple[str, str]]:
+    symbol_name = get_symbol_name_map_for_sync(db)
+    pairs: dict[str, tuple[str, str]] = {}
+    for base_symbol, coin_name in symbol_name.items():
+        base = base_symbol.upper().strip()
+        if not base or base == PRICE_SYNC_QUOTE_ASSET:
+            continue
+        pair = f"{base}{PRICE_SYNC_QUOTE_ASSET}"
+        pairs[pair] = (base, coin_name or base)
+    return pairs
+
+
 def upsert_price_row(
     db: Session,
     symbol: str,
@@ -584,6 +750,80 @@ async def fetch_binance_24h_ticker(client: httpx.AsyncClient, pair_symbol: str) 
     except Exception:
         return None
     return None
+
+
+async def price_stream_loop() -> None:
+    ws_url = f"{BINANCE_WS_BASE}/ws/{BINANCE_WS_STREAM.lower()}"
+    logger.info("Realtime price stream enabled: %s", ws_url)
+
+    pair_map: dict[str, tuple[str, str]] = {}
+    next_refresh = datetime.now(timezone.utc)
+
+    while True:
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=60, close_timeout=10) as ws:
+                while True:
+                    now = datetime.now(timezone.utc)
+                    if now >= next_refresh:
+                        with SessionLocal() as db:
+                            pair_map = get_pair_name_map_for_sync(db)
+                        next_refresh = now + timedelta(seconds=TRACKED_SYMBOLS_REFRESH_SECONDS)
+
+                        async with price_sync_lock:
+                            with SessionLocal() as db:
+                                upsert_price_row(
+                                    db,
+                                    PRICE_SYNC_QUOTE_ASSET,
+                                    PRICE_SYNC_QUOTE_ASSET,
+                                    Decimal("1"),
+                                    Decimal("0"),
+                                    now,
+                                )
+                                db.commit()
+
+                    raw = await ws.recv()
+                    payload = json.loads(raw)
+                    rows = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+                    if isinstance(rows, dict):
+                        rows = [rows]
+                    if not isinstance(rows, list):
+                        continue
+                    if not pair_map:
+                        continue
+
+                    updates: dict[str, tuple[str, Decimal, Decimal]] = {}
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        pair = str(row.get("s", "")).upper().strip()
+                        mapping = pair_map.get(pair)
+                        if not mapping:
+                            continue
+                        base_symbol, coin_name = mapping
+                        try:
+                            last_price = Decimal(str(row.get("c", "0")))
+                            open_price = Decimal(str(row.get("o", "0")))
+                        except InvalidOperation:
+                            continue
+                        if last_price <= 0:
+                            continue
+                        change = ((last_price - open_price) / open_price * Decimal("100")) if open_price > 0 else Decimal("0")
+                        updates[base_symbol] = (coin_name, last_price, change)
+
+                    if not updates:
+                        continue
+
+                    write_time = datetime.now(timezone.utc)
+                    async with price_sync_lock:
+                        with SessionLocal() as db:
+                            for base_symbol, (coin_name, price, change) in updates.items():
+                                upsert_price_row(db, base_symbol, coin_name, price, change, write_time)
+                            db.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Realtime Binance stream disconnected, reconnecting in 3s")
+            await asyncio.sleep(3)
 
 
 async def run_price_sync_once() -> int:

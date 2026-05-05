@@ -8,9 +8,11 @@ Self-hosted portfolio tracker mô phỏng kiểu CoinGecko Portfolio, chạy loc
 - Thêm transaction không giới hạn (`buy`, `sell`, `transfer_in`, `transfer_out`).
 - Tính holdings, average cost, realized/unrealized PnL.
 - Dashboard summary: current balance, 24h portfolio change, total PnL, top performer.
-- Tự động cập nhật giá hiện tại từ Binance Spot mỗi `5 phút` (mặc định) cho các symbol trong portfolio.
+- Tự động cập nhật giá hiện tại từ Binance Spot realtime qua WebSocket stream.
 - Form add transaction có dropdown search asset lấy từ Binance (không nhập symbol linh tinh).
-- Có nút `Update Now` để trigger sync giá ngay lập tức.
+- Có nút `Update Now` để trigger sync REST thủ công (fallback).
+- Có nút `Detail` cho từng coin: xem transaction history + card tổng quan theo coin.
+- Có nút `Delete` coin khỏi portfolio (xóa toàn bộ transaction của coin đó trong portfolio hiện tại).
 - Dữ liệu transaction/portfolio nằm local SQLite (`/app/data/portfolio.db` trong Docker volume).
 - Có Nginx reverse proxy, route public qua port `80`.
 
@@ -36,7 +38,11 @@ Mặc định bật sẵn trong `docker-compose.yml`:
 
 - `PRICE_SYNC_ENABLED=true`
 - `PRICE_SYNC_INTERVAL_SECONDS=300`
+- `PRICE_STREAM_ENABLED=true`
+- `TRACKED_SYMBOLS_REFRESH_SECONDS=30`
 - `BINANCE_API_BASE=https://api.binance.com`
+- `BINANCE_WS_BASE=wss://stream.binance.com:9443`
+- `BINANCE_WS_STREAM=!miniTicker@arr`
 - `PRICE_SYNC_QUOTE_ASSET=USDT`
 
 Ví dụ `BTC` sẽ map thành cặp `BTCUSDT`.
@@ -48,6 +54,8 @@ Ví dụ `BTC` sẽ map thành cặp `BTCUSDT`.
 - `GET /api/assets`
 - `POST /api/prices/sync-now`
 - `POST /api/transactions`
+- `GET /api/coins/{symbol}/detail?portfolio_id=...`
+- `DELETE /api/coins/{symbol}?portfolio_id=...`
 
 ## Lưu ý VPS
 

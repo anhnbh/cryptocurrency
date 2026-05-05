@@ -8,7 +8,11 @@ services:
       - DATABASE_URL=sqlite:///./data/portfolio.db
       - PRICE_SYNC_ENABLED=true
       - PRICE_SYNC_INTERVAL_SECONDS=300
+      - PRICE_STREAM_ENABLED=true
+      - TRACKED_SYMBOLS_REFRESH_SECONDS=30
       - BINANCE_API_BASE=https://api.binance.com
+      - BINANCE_WS_BASE=wss://stream.binance.com:9443
+      - BINANCE_WS_STREAM=!miniTicker@arr
       - PRICE_SYNC_QUOTE_ASSET=USDT
     volumes:
       - portfolio_data:/app/data

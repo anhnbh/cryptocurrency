@@ -213,8 +213,19 @@ button {
   border-color: var(--accent);
 }
 
+.btn.danger {
+  background: #a32532;
+  border-color: #a32532;
+}
+
 .btn.ghost {
   background: transparent;
+}
+
+.btn.small {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 .muted {
@@ -250,6 +261,35 @@ button {
   color: var(--red);
 }
 
+.hidden {
+  display: none;
+}
+
+.actions-cell {
+  display: flex;
+  gap: 6px;
+}
+
+.detail-panel {
+  margin-top: 16px;
+}
+
+.detail-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.detail-top h2 {
+  margin: 2px 0;
+}
+
+.detail-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 @media (max-width: 1024px) {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -257,6 +297,10 @@ button {
 
   .content-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -277,5 +321,14 @@ button {
 
   .inline-form {
     flex-direction: column;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-top {
+    display: grid;
+    gap: 10px;
   }
 }
